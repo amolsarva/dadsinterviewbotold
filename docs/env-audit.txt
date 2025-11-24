@@ -1,41 +1,11 @@
-# Environment Variable Audit
+## Supabase Storage
+- `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_STORAGE_BUCKET` — validated via `utils/blob-env.ts` and used across storage utilities.
 
-This document enumerates every environment variable reference in the codebase and clarifies whether it is required, optional, or context-specific. All values must be real; placeholders and silent defaults have been removed from the application code.
+## Email
+- `DEFAULT_NOTIFY_EMAIL` — required; verified on server bootstrap. Ensure it is a real inbox, not a placeholder.
 
-## Google Generative AI
-- `GOOGLE_API_KEY` (required) — Enables Google Gemini requests in `app/api/ask-audio/route.ts`, `app/api/session/[id]/intro/route.ts`, and the diagnostics endpoints.
-- `GOOGLE_MODEL` (required) — Primary model name resolved by `lib/google.ts` for audio and intro flows. Invalid or blank entries throw descriptive errors.
-- `GOOGLE_DIAGNOSTICS_MODEL` (optional override) — Preferred model for `/api/diagnostics/google`. Falls back to `GOOGLE_MODEL` when provided.
-- `PROVIDER` (required) — Must be set to `google` for audio capture; enforced in `app/api/ask-audio/route.ts`.
+## Providers
+- `OPENAI_API_KEY`, `GOOGLE_API_KEY`, `SENDGRID_API_KEY` as applicable. All must be set explicitly; no defaults are assumed.
 
-## OpenAI Platform
-- `OPENAI_API_KEY` (required) — Used by `lib/ai.ts`, `lib/openaiTts.ts`, and `/api/diagnostics/openai`. The diagnostics route now rejects requests when this key is missing.
-- `OPENAI_DIAGNOSTICS_MODEL` (required) — Explicit model for the OpenAI diagnostics check. The route no longer assumes a fallback name.
-
-## Email & Notifications
-- `MAIL_FROM` (required) — Sender address for summary emails (`lib/email.ts`). Missing or blank values throw errors.
-- `ENABLE_SESSION_EMAILS` (optional) — Feature flag interpreted in `lib/email.ts` with explicit diagnostic logging.
-- `RESEND_API_KEY` / `SENDGRID_API_KEY` (optional) — Provider credentials for summary delivery. Diagnostic logs record which provider is used.
-- `DEFAULT_NOTIFY_EMAIL` (required) — Server default email validated in `lib/default-notify-email.server.ts`.
-- `NEXT_PUBLIC_DEFAULT_NOTIFY_EMAIL` (required in client builds) — Enforced in `lib/default-notify-email.client.ts`.
-
-## Netlify Blobs & Storage
-- `NETLIFY_BLOBS_API_URL` (required) — Direct API base for storage diagnostics. Missing values immediately halt `/api/diagnostics/storage` with an explicit error.
-- `NETLIFY_BLOBS_SITE_ID`, `NETLIFY_BLOBS_STORE`, `NETLIFY_BLOBS_TOKEN` (required for Netlify-backed storage) — Validated via `utils/blob-env.ts` and used across blob utilities.
-- `NETLIFY_BLOBS_CONTEXT`, `NETLIFY_BLOBS_EDGE_URL`, `NETLIFY_BLOBS_UNCACHED_EDGE_URL`, `NETLIFY_BLOBS_CONSISTENCY` — Optional tuning parameters consumed by `lib/blob.ts`.
-- `NETLIFY_SITE_ID`, `NETLIFY_DEPLOY_ID`, `NETLIFY_BLOBS_PUBLIC_BASE_URL` — Optional metadata influencing diagnostics and public URL construction.
-- `BLOBS_TOKEN`, `BLOBS_SITE_ID`, `BLOBS_CONTEXT` — Deprecated aliases that now trigger diagnostics errors; rename them to the `NETLIFY_BLOBS_*` equivalents.
-- `FORCE_PROD_BLOBS` (optional) — Coerces production storage behavior (`utils/blob-env.ts`).
-
-## Deployment Metadata & Analytics
-- `NEXT_PUBLIC_SITE_URL`, `NEXT_PUBLIC_NETLIFY_SITE_URL`, `NEXT_PUBLIC_DEPLOYMENT_URL` — Client-facing diagnostics metadata surfaced on `/diagnostics`.
-- `NETLIFY`, `RENDER_GIT_COMMIT`, `RENDER_GIT_COMMIT_MESSAGE`, `COMMIT_REF`, `COMMIT_MESSAGE`, `GIT_COMMIT_SHA`, `GIT_COMMIT_MESSAGE`, `GIT_COMMIT_TIMESTAMP`, `GITHUB_REPOSITORY`, `NEXT_PUBLIC_GITHUB_REPOSITORY`, `NEXT_PUBLIC_GIT_COMMIT_SHA`, `NEXT_PUBLIC_GIT_COMMIT_MESSAGE`, `NEXT_PUBLIC_GIT_COMMIT_TIMESTAMP`, `NEXT_PUBLIC_GIT_REPO_OWNER`, `NEXT_PUBLIC_GIT_REPO_SLUG`, `GIT_REPO_OWNER`, `GIT_REPO_SLUG`, `DEPLOY_CREATED_AT`, `DEPLOY_ID`, `NETLIFY_DEPLOY_ID`, `MY_DEPLOY_ID`, `NETLIFY_SITE_NAME`, `DEPLOY_URL`, `DEPLOY_PRIME_URL` — Deployment provenance identifiers used by `app/layout.tsx`, diagnostics APIs, and UI summaries.
-- `NODE_ENV`, `NEXT_RUNTIME`, `CI` — Execution context flags referenced in diagnostics and build tooling.
-
-## AWS & Netlify Function Context
-- `AWS_REGION`, `AWS_DEFAULT_REGION`, `AWS_LAMBDA_FUNCTION_NAME`, `NETLIFY` — Surface environment metadata in `/api/diagnostics/tues`.
-
-## Testing & Tooling
-- `PLAYWRIGHT_TEST_BASE_URL` — Overrides the base URL for Playwright E2E tests.
-
-Each variable is now validated or logged with explicit diagnostics so that missing values are caught immediately during runtime.
+## Platform context
+- `VERCEL`, `VERCEL_ENV`, `NODE_ENV` are logged in diagnostics for traceability.
