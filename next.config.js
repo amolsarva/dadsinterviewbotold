@@ -1,9 +1,12 @@
 const { env } = process
 
 const relevantEnvSummary = () => ({
-  NETLIFY: env.NETLIFY ?? null,
-  DEPLOY_ID: env.DEPLOY_ID ?? null,
-  MY_DEPLOY_ID: env.MY_DEPLOY_ID ?? null,
+  VERCEL: env.VERCEL ?? null,
+  VERCEL_ENV: env.VERCEL_ENV ?? null,
+  NODE_ENV: env.NODE_ENV ?? null,
+  SUPABASE_URL: env.SUPABASE_URL ? '[set]' : null,
+  SUPABASE_SERVICE_ROLE_KEY: env.SUPABASE_SERVICE_ROLE_KEY ? `${env.SUPABASE_SERVICE_ROLE_KEY.length} chars` : null,
+  SUPABASE_STORAGE_BUCKET: env.SUPABASE_STORAGE_BUCKET ?? null,
 })
 
 const diagnosticLog = (message, extra = {}) => {
@@ -21,30 +24,13 @@ const diagnosticThrow = (message, extra = {}) => {
   throw new Error(formattedMessage)
 }
 
-if (env.NETLIFY) {
-  diagnosticLog('Netlify runtime detected, validating deploy identifiers before applying Option B patch')
-
-  if (!env.DEPLOY_ID) {
-    diagnosticThrow('Required Netlify environment variable DEPLOY_ID is missing; cannot safely continue with deploy rehydration')
-  }
-
-  if (!env.MY_DEPLOY_ID) {
-    diagnosticThrow('Required override environment variable MY_DEPLOY_ID is missing; set it explicitly to opt in to the deploy rehydration patch')
-  }
-
-  if (env.MY_DEPLOY_ID !== env.DEPLOY_ID) {
-    diagnosticLog('Applying Option B deploy rehydration by syncing DEPLOY_ID from MY_DEPLOY_ID', {
-      previousDeployId: env.DEPLOY_ID,
-      overrideDeployId: env.MY_DEPLOY_ID,
-    })
-    env.DEPLOY_ID = env.MY_DEPLOY_ID
-    diagnosticLog('Option B deploy rehydration complete; DEPLOY_ID now matches override value')
-  } else {
-    diagnosticLog('DEPLOY_ID already matches MY_DEPLOY_ID; no Option B patch necessary')
-  }
-} else {
-  diagnosticLog('Non-Netlify runtime detected; skipping Option B deploy identifier patch')
+const requiredSupabaseKeys = ['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY', 'SUPABASE_STORAGE_BUCKET']
+const missing = requiredSupabaseKeys.filter((key) => !env[key] || !String(env[key]).trim().length)
+if (missing.length) {
+  diagnosticThrow('Missing required Supabase configuration for Vercel deployment', { missing })
 }
+
+diagnosticLog('Vercel runtime detected; Supabase configuration present')
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {

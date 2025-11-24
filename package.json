@@ -14,7 +14,7 @@
     "ci-check": "npm run lint && npm run type-check && npm run build"
   },
   "dependencies": {
-    "@netlify/blobs": "^10.0.11",
+    "@supabase/supabase-js": "^2.45.4",
     "@sendgrid/mail": "^7.7.0",
     "autoprefixer": "10.4.20",
     "lucide-react": "0.460.0",
@@ -29,7 +29,6 @@
     "zustand": "4.5.4"
   },
   "devDependencies": {
-    "@netlify/plugin-nextjs": "^5.14.3",
     "@playwright/test": "1.46.1",
     "@types/node": "20.11.30",
     "@types/react": "18.3.3",
