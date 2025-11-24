@@ -8,6 +8,13 @@ type ParsedSupabaseUrl = {
   host: string
 }
 
+function looksLikePlaceholder(value: string | undefined): boolean {
+  if (!value) return false
+  const lowered = value.trim().toLowerCase()
+  const placeholderTokens = ['your-project-ref', 'example.supabase.co', 'changeme', 'placeholder', 'todo', '[set]', '<']
+  return placeholderTokens.some((token) => lowered.includes(token))
+}
+
 function parseSupabaseUrl(value: string | undefined): ParsedSupabaseUrl | null {
   if (!value) return null
   try {
@@ -77,6 +84,24 @@ export function assertSupabaseEnv(options: BlobEnvAssertionOptions = {}) {
     throw new Error(message)
   }
 
+  if (looksLikePlaceholder(snapshot.SUPABASE_URL)) {
+    const message = 'SUPABASE_URL looks like a placeholder. Set the real project URL (e.g., https://<project>.supabase.co).'
+    logBlobDiagnostic('error', 'supabase-env-url-placeholder', { error: message, value: snapshot.SUPABASE_URL })
+    throw new Error(message)
+  }
+
+  if (looksLikePlaceholder(snapshot.SUPABASE_SERVICE_ROLE_KEY)) {
+    const message = 'SUPABASE_SERVICE_ROLE_KEY looks like a placeholder. Provide a real service role key from the Supabase project.'
+    logBlobDiagnostic('error', 'supabase-env-key-placeholder', { error: message })
+    throw new Error(message)
+  }
+
+  if (looksLikePlaceholder(snapshot.SUPABASE_STORAGE_BUCKET)) {
+    const message = 'SUPABASE_STORAGE_BUCKET looks like a placeholder. Configure the actual bucket name to use for storage.'
+    logBlobDiagnostic('error', 'supabase-env-bucket-placeholder', { error: message })
+    throw new Error(message)
+  }
+
   const hostLower = parsedUrl.host.toLowerCase()
   const looksSupabaseHost = hostLower.endsWith('.supabase.co') || hostLower.endsWith('.supabase.net')
   if (!looksSupabaseHost) {
@@ -84,6 +109,12 @@ export function assertSupabaseEnv(options: BlobEnvAssertionOptions = {}) {
     logBlobDiagnostic('error', 'supabase-env-url-host-mismatch', { error: message, host: parsedUrl.host })
     throw new Error(message)
   }
+
+  logBlobDiagnostic('log', 'supabase-env-validated', {
+    host: parsedUrl.host,
+    origin: parsedUrl.origin,
+    bucket: snapshot.SUPABASE_STORAGE_BUCKET,
+  })
 }
 
 let cachedClient: SupabaseClient | null = null
