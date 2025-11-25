@@ -591,6 +591,109 @@ function formatSummary(key: TestKey, data: any): string {
   return data.ok ? 'Passed' : 'Failed'
 }
 
+function buildStorageRemediation(data: any): RemediationStep[] {
+  const steps: RemediationStep[] = []
+  const envSnapshot = data?.env?.env || data?.env?.diagnostics || data?.env?.supabase
+  const supabaseUrl: string | null =
+    (envSnapshot?.SUPABASE_URL as string | null | undefined) ??
+    (typeof envSnapshot?.supabaseUrl === 'string' ? envSnapshot.supabaseUrl : null)
+  const serviceRolePresent = Boolean(
+    envSnapshot?.SUPABASE_SERVICE_ROLE_KEY || envSnapshot?.supabaseServiceRoleKey,
+  )
+  const bucketName: string | null =
+    (envSnapshot?.SUPABASE_STORAGE_BUCKET as string | null | undefined) ??
+    (typeof envSnapshot?.supabaseBucket === 'string' ? envSnapshot.supabaseBucket : null)
+
+  if (supabaseUrl && serviceRolePresent && bucketName) {
+    steps.push({
+      label: 'Env configured (SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_STORAGE_BUCKET)',
+      outcome: 'ok',
+      detail: `Bucket ${bucketName}`,
+    })
+  } else {
+    const missing: string[] = []
+    if (!supabaseUrl) missing.push('SUPABASE_URL')
+    if (!serviceRolePresent) missing.push('SUPABASE_SERVICE_ROLE_KEY')
+    if (!bucketName) missing.push('SUPABASE_STORAGE_BUCKET')
+    steps.push({
+      label: 'Env configured (SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_STORAGE_BUCKET)',
+      outcome: 'error',
+      detail: missing.length ? `Missing ${missing.join(', ')}` : 'Incomplete configuration',
+      suggestion: 'Set all Supabase storage env vars and redeploy.',
+    })
+  }
+
+  const healthOk = data?.health?.ok === true
+  const healthReason: string | undefined = data?.health?.reason || data?.health?.error
+  steps.push({
+    label: 'Supabase bucket health check',
+    outcome: healthOk ? 'ok' : 'error',
+    detail: healthOk ? 'List probe succeeded' : healthReason || 'Health probe failed',
+    suggestion: healthOk
+      ? undefined
+      : healthReason && healthReason.toLowerCase().includes('enotfound')
+      ? 'Check that SUPABASE_URL host resolves and the project is active.'
+      : 'Confirm Supabase project is up and keys are active.',
+  })
+
+  const flow: BlobFlowDiagnostics | undefined = Array.isArray(data?.flow?.steps)
+    ? (data.flow as BlobFlowDiagnostics)
+    : undefined
+  if (flow && Array.isArray(flow.steps)) {
+    flow.steps.forEach((step) => {
+      const outcome: RemediationStep['outcome'] = step.ok
+        ? 'ok'
+        : step.optional || step.skipped
+        ? 'warn'
+        : 'error'
+      const suggestion = step.ok
+        ? undefined
+        : step.error && step.error.toLowerCase().includes('fetch failed')
+        ? 'Verify Supabase URL, bucket name, and that the service role key is enabled.'
+        : step.status === 403
+        ? 'Check bucket RLS policies and ensure service_role key is used.'
+        : undefined
+      steps.push({
+        label: step.label || step.id,
+        outcome,
+        detail: [step.method, step.status ? `HTTP ${step.status}` : null, step.error || step.responseSnippet]
+          .filter(Boolean)
+          .join(' · '),
+        suggestion,
+      })
+    })
+  }
+
+  return steps
+}
+
+function buildDefaultRemediation(
+  key: TestKey,
+  ok: boolean,
+  status: number | null,
+  message?: string,
+): RemediationStep[] {
+  const suggestions: Partial<Record<TestKey, string>> = {
+    openai: 'Verify OPENAI_API_KEY and model env vars; check provider status.',
+    google: 'Verify GOOGLE_API_KEY/GOOGLE_MODEL and confirm access is enabled.',
+    email: 'Check SENDGRID_API_KEY or RESEND_API_KEY and DEFAULT_NOTIFY_EMAIL.',
+    tues: 'Confirm TUES credentials are set and valid.',
+    smoke: 'Inspect server logs; ensure dependent services are reachable.',
+    e2e: 'Run storage and provider checks; fix failures above first.',
+    health: 'Review storage/db details in the health payload.',
+    storage: 'Inspect Supabase URL, service role key, bucket name, and RLS policies.',
+  }
+
+  return [
+    {
+      label: `${TEST_CONFIG[key].label} response`,
+      outcome: ok ? 'ok' : 'error',
+      detail: status ? `HTTP ${status}${message ? ` — ${message}` : ''}` : message,
+      suggestion: ok ? undefined : suggestions[key],
+    },
+  ]
+}
+
 export default function DiagnosticsPage() {
   const [latestTranscript, setLatestTranscript] = useState<TranscriptSynopsis | null>(null)
   const [latestProviderError, setLatestProviderError] = useState<ProviderErrorSynopsis | null>(null)
@@ -599,6 +702,7 @@ export default function DiagnosticsPage() {
   const [envError, setEnvError] = useState<string | null>(null)
   const [log, setLog] = useState<string>('Ready. Run diagnostics to gather fresh results.')
   const [results, setResults] = useState<Record<TestKey, TestResult>>(() => initialResults())
+  const [remediationPlans, setRemediationPlans] = useState<Partial<Record<TestKey, RemediationStep[]>>>({})
   const [isRunning, setIsRunning] = useState(false)
   const [foxes, setFoxes] = useState<FoxRecord[]>([])
 
@@ -977,6 +1081,10 @@ export default function DiagnosticsPage() {
     () => ({ idle: '•', pending: '…', ok: '✅', error: '❌' } as const),
     []
   )
+  const remediationIcon = useMemo(
+    () => ({ ok: '✅', warn: '⚠️', error: '❌' } as const),
+    [],
+  )
 
   const updateResult = (key: TestKey, patch: Partial<TestResult>) => {
     setResults(prev => ({ ...prev, [key]: { ...prev[key], ...patch } }))
@@ -988,6 +1096,7 @@ export default function DiagnosticsPage() {
     setLog('Running diagnostics...')
     setResults(initialResults())
     setFoxes([])
+    setRemediationPlans({})
 
     const resultStatusLog: Record<TestKey, TestResult['status']> = Object.fromEntries(
       TEST_ORDER.map((key) => [key, 'idle' as TestResult['status']]),
@@ -1209,6 +1318,7 @@ export default function DiagnosticsPage() {
 
         let normalizedMessage: string | undefined
         let normalizedOk = res.ok
+        let remediationSteps: RemediationStep[] | undefined
 
         if (parsed) {
           append(JSON.stringify(parsed, null, 2))
@@ -1218,6 +1328,10 @@ export default function DiagnosticsPage() {
           normalizedMessage = message
           updateResult(key, { status: ok ? 'ok' : 'error', message })
           resultStatusLog[key] = ok ? 'ok' : 'error'
+          remediationSteps =
+            key === 'storage'
+              ? buildStorageRemediation(parsed)
+              : buildDefaultRemediation(key, ok, res.status, message)
           if (key === 'storage') {
             const diagnosticsSummary = summarizeNetlifyDiagnostics(parsed?.env?.diagnostics, deploymentSnapshot)
             if (diagnosticsSummary.length) {
@@ -1260,6 +1374,7 @@ export default function DiagnosticsPage() {
             message: normalizedMessage,
           })
           resultStatusLog[key] = res.ok ? 'ok' : 'error'
+          remediationSteps = buildDefaultRemediation(key, res.ok, res.status, normalizedMessage)
         }
 
         logClientDiagnostics('log', 'diagnostics:test:success', {
@@ -1267,11 +1382,19 @@ export default function DiagnosticsPage() {
           response: { status: res.status, ok: normalizedOk },
           message: normalizedMessage,
         })
+
+        if (remediationSteps && remediationSteps.length) {
+          setRemediationPlans((prev) => ({ ...prev, [key]: remediationSteps }))
+        }
       } catch (e: any) {
         const errorMessage = e?.message || 'Request failed'
         append(`Request failed: ${errorMessage}`)
         updateResult(key, { status: 'error', message: errorMessage })
         resultStatusLog[key] = 'error'
+        setRemediationPlans((prev) => ({
+          ...prev,
+          [key]: buildDefaultRemediation(key, false, null, errorMessage),
+        }))
         logClientDiagnostics('error', 'diagnostics:test:error', {
           test: key,
           error:
@@ -1466,6 +1589,7 @@ export default function DiagnosticsPage() {
         <div className="diagnostics-tests">
           {TEST_ORDER.map((key) => {
             const result = results[key]
+            const steps = remediationPlans[key] ?? []
             return (
               <div key={key} className="diagnostic-card">
                 <div className="diagnostic-card-head">
@@ -1475,6 +1599,24 @@ export default function DiagnosticsPage() {
                   <span className="diagnostic-label">{TEST_CONFIG[key].label}</span>
                 </div>
                 {result.message && <div className="diagnostic-message">{result.message}</div>}
+                {steps.length > 0 && (
+                  <ul className="diagnostic-steps">
+                    {steps.map((step, index) => (
+                      <li key={`${key}-step-${index}`} className="diagnostic-step">
+                        <span className="diagnostic-step-icon" aria-hidden="true">
+                          {remediationIcon[step.outcome]}
+                        </span>
+                        <div className="diagnostic-step-body">
+                          <div className="diagnostic-step-label">{step.label}</div>
+                          {step.detail && <div className="diagnostic-step-detail">{step.detail}</div>}
+                          {step.suggestion && (
+                            <div className="diagnostic-step-suggestion">Suggestion: {step.suggestion}</div>
+                          )}
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </div>
             )
           })}
