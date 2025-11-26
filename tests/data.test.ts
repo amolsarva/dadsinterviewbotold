@@ -19,6 +19,7 @@ vi.mock('../lib/blob', () => ({
   listBlobs: listBlobsMock,
   deleteBlobsByPrefix: deleteByPrefixMock,
   deleteBlob: deleteBlobMock,
+  primeNetlifyBlobContextFromHeaders: vi.fn(() => true),
 }))
 
 const sendEmailMock = vi.fn()
@@ -146,6 +147,43 @@ describe('finalizeSession', () => {
     expect(primer.text).toContain('### Additional Notes & Identity')
     expect(primer.text).toContain('Latest • Hello there from the porch')
     expect(putBlobMock.mock.calls.some(([path]) => path === 'memory/primers/unassigned.md')).toBe(true)
+  })
+})
+
+describe('appendTurn API error handling', () => {
+  beforeEach(async () => {
+    vi.resetModules()
+    putBlobMock.mockClear()
+    listBlobsMock.mockClear()
+    deleteByPrefixMock.mockClear()
+    deleteBlobMock.mockClear()
+    sendEmailMock.mockReset()
+    clearFoxes()
+    const data = await import('../lib/data')
+    data.__dangerousResetMemoryState()
+  })
+
+  it('bubbles blob failures to the API with diagnostics without mutating memory', async () => {
+    const data = await import('../lib/data')
+    const session = await data.createSession({ email_to: 'user@example.com' })
+    const blobError = new Error('forced blob failure')
+    putBlobMock.mockRejectedValueOnce(blobError)
+
+    const { POST } = await import('../app/api/session/[id]/turn/route')
+    const payload = { role: 'user', text: 'hello there from diagnostics' }
+    const req = { headers: new Headers(), json: async () => payload } as any
+
+    const response = await POST(req, { params: { id: session.id } })
+    const body = await response.json()
+
+    expect(response.status).toBe(500)
+    expect(body.error).toContain('session manifest persistence failed')
+    expect(body.diagnostic?.env).toBeDefined()
+    expect(body.diagnostic?.error?.cause?.message).toContain('forced blob failure')
+
+    const stored = await data.getSession(session.id)
+    expect(stored?.turns?.length ?? 0).toBe(0)
+    expect(stored?.total_turns ?? 0).toBe(0)
   })
 })
 
