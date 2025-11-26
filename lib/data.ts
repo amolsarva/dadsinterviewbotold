@@ -1,4 +1,5 @@
 import { putBlobFromBuffer, listBlobs, deleteBlobsByPrefix, deleteBlob } from './blob'
+import { getSupabaseBucket, logBlobDiagnostic } from '../utils/blob-env'
 import { sendSummaryEmail } from './email'
 import { flagFox } from './foxes'
 import { generateSessionTitle, SummarizableTurn } from './session-title'
@@ -628,15 +629,57 @@ function buildSessionManifestPayload(session: RememberedSession) {
 }
 
 async function persistSessionSnapshot(session: RememberedSession) {
+  const manifestPath = sessionManifestPath(session.id)
+  const startedAt = new Date().toISOString()
+
   try {
+    const bucket = getSupabaseBucket()
+    logBlobDiagnostic('log', 'session-manifest:prepare', {
+      sessionId: session.id,
+      manifestPath,
+      bucket,
+      startedAt,
+      step: 'build-payload',
+    })
+
     const manifest = buildSessionManifestPayload(session)
+
+    logBlobDiagnostic('log', 'session-manifest:delete:attempt', {
+      sessionId: session.id,
+      manifestPath,
+      bucket,
+      step: 'delete-existing-before-upload',
+    })
+    await deleteBlob(manifestPath)
+    logBlobDiagnostic('log', 'session-manifest:delete:success', {
+      sessionId: session.id,
+      manifestPath,
+      bucket,
+      step: 'delete-existing-before-upload',
+    })
+
+    logBlobDiagnostic('log', 'session-manifest:upload:attempt', {
+      sessionId: session.id,
+      manifestPath,
+      bucket,
+      step: 'upload-with-upsert',
+    })
     const blob = await putBlobFromBuffer(
-      sessionManifestPath(session.id),
+      manifestPath,
       Buffer.from(JSON.stringify(manifest, null, 2), 'utf8'),
       'application/json',
       { access: 'public' },
     )
     const manifestUrl = blob.downloadUrl || blob.url
+
+    logBlobDiagnostic('log', 'session-manifest:upload:success', {
+      sessionId: session.id,
+      manifestPath,
+      bucket,
+      manifestUrl,
+      step: 'upload-with-upsert',
+    })
+
     if (manifestUrl) {
       session.artifacts = {
         ...(session.artifacts || {}),
@@ -645,11 +688,13 @@ async function persistSessionSnapshot(session: RememberedSession) {
       }
     }
   } catch (err) {
-    console.warn(
-      'Failed to persist session snapshot',
-      err,
-      err && typeof err === 'object' ? (err as any).blobDetails : undefined,
-    )
+    const errorDetails = err instanceof Error ? { message: err.message, stack: err.stack } : { error: err }
+    console.error('[diagnostic]', new Date().toISOString(), 'session-manifest:failure', {
+      sessionId: session.id,
+      manifestPath,
+      error: errorDetails,
+    })
+    throw err
   }
 }
 
