@@ -5,7 +5,7 @@ export type ParsedRepo = {
 }
 
 export type DeploymentMetadata = {
-  platform: 'vercel' | 'custom'
+  platform: 'vercel' | 'netlify' | 'custom'
   deployId: string
   deployIdSource: string
   commitRef: string | null

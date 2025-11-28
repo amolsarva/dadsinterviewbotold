@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { DeploymentMetadata } from '@/types/deployment'
 
-type TestKey = 'health' | 'storage' | 'google' | 'openai' | 'tues' | 'smoke' | 'e2e' | 'email'
+type TestKey = 'health' | 'storage' | 'google' | 'openai' | 'smoke' | 'e2e' | 'email'
 type TestResult = { status: 'idle' | 'pending' | 'ok' | 'error'; message?: string }
 type FoxRecord = {
   id: string
@@ -69,6 +69,14 @@ type BlobFlowStep = {
   note?: string
   error?: string
   responseSnippet?: string
+}
+
+type RemediationOutcome = 'ok' | 'warn' | 'error'
+type RemediationStep = {
+  label: string
+  outcome: RemediationOutcome
+  detail?: string
+  suggestion?: string
 }
 
 type BlobFlowDiagnostics = {
@@ -156,13 +164,12 @@ const TEST_CONFIG: Record<TestKey, { label: string; path: string; method: 'GET' 
   storage: { label: 'Storage check', path: '/api/diagnostics/storage', method: 'GET' },
   google: { label: 'Google AI API check', path: '/api/diagnostics/google', method: 'GET' },
   openai: { label: 'OpenAI API check', path: '/api/diagnostics/openai', method: 'GET' },
-  tues: { label: 'TUES credential check', path: '/api/diagnostics/tues', method: 'POST' },
   smoke: { label: 'Smoke test', path: '/api/diagnostics/smoke', method: 'POST' },
   e2e: { label: 'End-to-end test', path: '/api/diagnostics/e2e', method: 'POST' },
   email: { label: 'Email test', path: '/api/diagnostics/email', method: 'POST' },
 }
 
-const TEST_ORDER: TestKey[] = ['health', 'storage', 'google', 'openai', 'tues', 'smoke', 'e2e', 'email']
+const TEST_ORDER: TestKey[] = ['health', 'storage', 'google', 'openai', 'smoke', 'e2e', 'email']
 
 function initialResults(): Record<TestKey, TestResult> {
   return {
@@ -170,7 +177,6 @@ function initialResults(): Record<TestKey, TestResult> {
     storage: { status: 'idle' },
     google: { status: 'idle' },
     openai: { status: 'idle' },
-    tues: { status: 'idle' },
     smoke: { status: 'idle' },
     e2e: { status: 'idle' },
     email: { status: 'idle' },
@@ -677,7 +683,6 @@ function buildDefaultRemediation(
     openai: 'Verify OPENAI_API_KEY and model env vars; check provider status.',
     google: 'Verify GOOGLE_API_KEY/GOOGLE_MODEL and confirm access is enabled.',
     email: 'Check SENDGRID_API_KEY or RESEND_API_KEY and DEFAULT_NOTIFY_EMAIL.',
-    tues: 'Confirm TUES credentials are set and valid.',
     smoke: 'Inspect server logs; ensure dependent services are reachable.',
     e2e: 'Run storage and provider checks; fix failures above first.',
     health: 'Review storage/db details in the health payload.',

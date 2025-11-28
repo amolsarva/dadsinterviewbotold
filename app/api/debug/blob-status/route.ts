@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { blobHealth, getBlobEnvironment, primeNetlifyBlobContextFromHeaders } from '@/lib/blob'
 import { jsonErrorResponse } from '@/lib/api-error'
 
+export const dynamic = 'force-dynamic'
+
 export async function GET(request: NextRequest) {
   try {
     primeNetlifyBlobContextFromHeaders(request.headers)
