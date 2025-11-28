@@ -27,17 +27,35 @@ vi.mock('../lib/email', () => ({
   sendSummaryEmail: sendEmailMock,
 }))
 
+afterEach(() => {
+  global.fetch = originalFetch
+  listBlobsMock.mockImplementation(async () => ({ blobs: [], hasMore: false }))
+})
+
 describe('finalizeSession', () => {
   beforeEach(async () => {
     vi.resetModules()
-    putBlobMock.mockClear()
-    listBlobsMock.mockClear()
-    deleteByPrefixMock.mockClear()
-    deleteBlobMock.mockClear()
+    process.env.SUPABASE_URL = 'https://example.supabase.co'
+    process.env.SUPABASE_SERVICE_ROLE_KEY = 'service-role-key'
+    process.env.SUPABASE_STORAGE_BUCKET = 'test-bucket'
+    putBlobMock.mockReset()
+    putBlobMock.mockImplementation(async (path: string, _buf: Buffer, _type: string, _options?: unknown) => ({
+      url: `https://blob.test/${path}`,
+      downloadUrl: `https://blob.test/${path}`,
+    }))
+    listBlobsMock.mockReset()
+    listBlobsMock.mockImplementation(async (_options?: { prefix?: string; limit?: number; cursor?: string }): Promise<ListBlobResult> => ({
+      blobs: [],
+      hasMore: false,
+    }))
+    deleteByPrefixMock.mockReset()
+    deleteBlobMock.mockReset()
+    deleteBlobMock.mockImplementation(async (_path?: string): Promise<boolean> => false)
     sendEmailMock.mockReset()
     clearFoxes()
     const data = await import('../lib/data')
     data.__dangerousResetMemoryState()
+    global.fetch = vi.fn(async () => new Response('not found', { status: 404 })) as any
   })
 
   it('reports success when email provider succeeds', async () => {
@@ -274,21 +292,57 @@ describe('session deletion helpers', () => {
 describe('memory continuity across requests', () => {
   beforeEach(async () => {
     vi.resetModules()
-    putBlobMock.mockClear()
-    listBlobsMock.mockClear()
-    deleteByPrefixMock.mockClear()
-    deleteBlobMock.mockClear()
+    process.env.SUPABASE_URL = 'https://example.supabase.co'
+    process.env.SUPABASE_SERVICE_ROLE_KEY = 'service-role-key'
+    process.env.SUPABASE_STORAGE_BUCKET = 'test-bucket'
+    putBlobMock.mockReset()
+    putBlobMock.mockImplementation(async (path: string, _buf: Buffer, _type: string, _options?: unknown) => ({
+      url: `https://blob.test/${path}`,
+      downloadUrl: `https://blob.test/${path}`,
+    }))
+    listBlobsMock.mockReset()
+    listBlobsMock.mockImplementation(async (_options?: { prefix?: string; limit?: number; cursor?: string }): Promise<ListBlobResult> => ({
+      blobs: [],
+      hasMore: false,
+    }))
+    deleteByPrefixMock.mockReset()
+    deleteBlobMock.mockReset()
+    deleteBlobMock.mockImplementation(async (_path?: string): Promise<boolean> => false)
     sendEmailMock.mockReset()
     clearFoxes()
     const data = await import('../lib/data')
     data.__dangerousResetMemoryState()
-    listBlobsMock.mockImplementation(async () => ({ blobs: [], hasMore: false }))
     global.fetch = vi.fn(async () => new Response('not found', { status: 404 })) as any
   })
+  it('overwrites manifests when appending multiple turns to the same session', async () => {
+    const uploadedPaths = new Set<string>()
+    deleteBlobMock.mockImplementation(async (path?: string): Promise<boolean> => {
+      if (path) uploadedPaths.delete(path)
+      return true
+    })
+    putBlobMock.mockImplementation(async (path: string, _buf: Buffer, _type: string) => {
+      if (uploadedPaths.has(path)) {
+        const err = new Error('duplicate upload prevented')
+        ;(err as any).code = 'duplicate'
+        throw err
+      }
+      uploadedPaths.add(path)
+      return { url: `https://blob.test/${path}`, downloadUrl: `https://blob.test/${path}` }
+    })
 
-  afterEach(() => {
-    global.fetch = originalFetch
-    listBlobsMock.mockImplementation(async () => ({ blobs: [], hasMore: false }))
+    const data = await import('../lib/data')
+    const session = await data.createSession({ email_to: 'test@example.com' })
+    const manifestPath = `sessions/${session.id}/session-${session.id}.json`
+
+    await data.appendTurn(session.id, { role: 'user', text: 'First note' })
+    await expect(data.appendTurn(session.id, { role: 'assistant', text: 'Second note' })).resolves.toBeTruthy()
+
+    expect(deleteBlobMock).toHaveBeenCalledWith(manifestPath)
+    expect(putBlobMock).toHaveBeenCalledTimes(3)
+    const stored = await data.getSession(session.id)
+    const manifestUrl = `https://blob.test/${manifestPath}`
+    expect(stored?.artifacts?.session_manifest).toBe(manifestUrl)
+    expect(stored?.artifacts?.manifest).toBe(manifestUrl)
   })
 
   it('rehydrates a stored session manifest before appending turns', async () => {
