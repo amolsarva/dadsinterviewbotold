@@ -4,6 +4,49 @@ import { buildDefaultNotifyEmailBootstrapScript } from '@/lib/default-notify-ema
 import { buildDeploymentBootstrapScript, resolveDeploymentMetadata } from '@/lib/deployment-metadata.server'
 import { SiteNav } from './site-nav'
 
+type LogLevel = 'log' | 'error'
+
+function formatTimestamp() {
+  return new Date().toISOString()
+}
+
+function envSummary() {
+  return {
+    nodeEnv: process.env.NODE_ENV ?? null,
+    platform: process.env.VERCEL ? 'vercel' : process.env.NETLIFY ? 'netlify' : 'custom',
+    totalKeys: Object.keys(process.env).length,
+  }
+}
+
+function log(level: LogLevel, step: string, payload: Record<string, unknown> = {}) {
+  const entry = { ...payload, envSummary: envSummary() }
+  const message = `[diagnostic] ${formatTimestamp()} layout:${step} ${JSON.stringify(entry)}`
+  if (level === 'error') {
+    console.error(message)
+  } else {
+    console.log(message)
+  }
+}
+
+function tryBuildDefaultEmailBootstrapScript() {
+  try {
+    const script = buildDefaultNotifyEmailBootstrapScript()
+    log('log', 'default-email:bootstrap:ready')
+    return script
+  } catch (error) {
+    const errorPayload =
+      error instanceof Error
+        ? { name: error.name, message: error.message }
+        : { message: 'unknown_error' }
+    log('error', 'default-email:bootstrap:skipped', { error: errorPayload })
+    const clientNotice =
+      "(() => {const now = new Date().toISOString(); const payload = { reason: 'missing_default_notify_email', envSummary: " +
+      `JSON.stringify(${JSON.stringify(envSummary())}) }; ` +
+      "console.error('[diagnostic] ' + now + ' default-email:bootstrap:client-missing ' + JSON.stringify(payload));})();"
+    return clientNotice
+  }
+}
+
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   const deploymentMetadata = resolveDeploymentMetadata()
   const commitSha = deploymentMetadata.commitRef ?? ''
@@ -35,7 +78,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   }
   const buildTimestampLabel = `This build is from ${formattedTime}`
 
-  const defaultEmailBootstrapScript = buildDefaultNotifyEmailBootstrapScript()
+  const defaultEmailBootstrapScript = tryBuildDefaultEmailBootstrapScript()
   const deploymentBootstrapScript = buildDeploymentBootstrapScript(deploymentMetadata)
 
   return (

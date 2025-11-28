@@ -81,6 +81,9 @@ function pickDeployId(): { candidate: DeployIdCandidate | null; cleanedValue: st
     { key: 'MY_DEPLOY_ID', value: process.env.MY_DEPLOY_ID },
     { key: 'NETLIFY_DEPLOY_ID', value: process.env.NETLIFY_DEPLOY_ID },
     { key: 'DEPLOY_ID', value: process.env.DEPLOY_ID },
+    { key: 'VERCEL_DEPLOYMENT_ID', value: process.env.VERCEL_DEPLOYMENT_ID },
+    { key: 'VERCEL_DEPLOY_ID', value: process.env.VERCEL_DEPLOY_ID },
+    { key: 'VERCEL_BUILD_ID', value: process.env.VERCEL_BUILD_ID },
     { key: 'NEXT_PUBLIC_DEPLOY_ID', value: process.env.NEXT_PUBLIC_DEPLOY_ID },
   ]
 
@@ -99,13 +102,35 @@ function pickDeployId(): { candidate: DeployIdCandidate | null; cleanedValue: st
 export function resolveDeploymentMetadata(): DeploymentMetadata {
   log('log', 'resolve:start', {})
 
+  const platform: DeploymentMetadata['platform'] =
+    process.env.NETLIFY === 'true'
+      ? 'netlify'
+      : process.env.VERCEL === '1' || process.env.VERCEL === 'true'
+      ? 'vercel'
+      : 'custom'
+
   const { candidate, cleanedValue } = pickDeployId()
 
-  if (!candidate || !cleanedValue) {
+  const deployIdRequired = platform === 'netlify'
+  const hasDeployId = Boolean(candidate && cleanedValue)
+
+  if (deployIdRequired && !hasDeployId) {
     const message =
       'Deploy ID is required but missing. Export NETLIFY_DEPLOY_ID (or MY_DEPLOY_ID/DEPLOY_ID) before building.'
-    log('error', 'resolve:deploy-id-missing', {})
+    log('error', 'resolve:deploy-id-missing', { platform, deployIdRequired })
     throw new Error(message)
+  }
+
+  const deployId =
+    cleanedValue ?? `missing-deploy-id-${Date.now()}`
+  const deployIdSource = candidate?.key ?? 'fallback:missing'
+
+  if (!hasDeployId) {
+    log('error', 'resolve:deploy-id-fallback', {
+      platform,
+      deployIdSource,
+      deployId,
+    })
   }
 
   const commitRef = process.env.COMMIT_REF ?? process.env.GIT_COMMIT_SHA ?? null
@@ -122,9 +147,9 @@ export function resolveDeploymentMetadata(): DeploymentMetadata {
   const repo = parseRepoFromEnv()
 
   const metadata: DeploymentMetadata = {
-    platform: process.env.NETLIFY === 'true' ? 'netlify' : 'custom',
-    deployId: cleanedValue,
-    deployIdSource: candidate.key,
+    platform,
+    deployId,
+    deployIdSource,
     commitRef,
     commitMessage,
     commitTimestamp,
