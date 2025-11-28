@@ -1,5 +1,5 @@
 import { putBlobFromBuffer, listBlobs, deleteBlobsByPrefix, deleteBlob } from './blob'
-import { getSupabaseBucket, logBlobDiagnostic } from '../utils/blob-env'
+import { getSupabaseBucket, logBlobDiagnostic } from '@/utils/blob-env'
 import { sendSummaryEmail } from './email'
 import { flagFox } from './foxes'
 import { generateSessionTitle, SummarizableTurn } from './session-title'
@@ -659,6 +659,18 @@ async function persistSessionSnapshot(session: RememberedSession) {
   const manifest = buildSessionManifestPayload(session)
   const manifestPath = sessionManifestPath(session.id)
   const timestamp = diagnosticTimestamp()
+  console.log(
+    `[diagnostic] ${timestamp} session:persist:snapshot:prep ${JSON.stringify({ sessionId: session.id, manifestPath })}`,
+  )
+  await deleteBlob(manifestPath).catch((error) => {
+    console.error(
+      `[diagnostic] ${timestamp} session:persist:snapshot:prep-delete-failed ${JSON.stringify({
+        sessionId: session.id,
+        manifestPath,
+        error: describeError(error),
+      })}`,
+    )
+  })
   try {
     const blob = await putBlobFromBuffer(
       manifestPath,

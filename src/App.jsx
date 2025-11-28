@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { calibrateRMS, recordUntilSilence, blobToBase64 } from './lib/audio'
 
 const PROVIDER_DEFAULT = 'google'
-const OPENING = `Hello and welcome to Dad’s Interview Bot. I’m your biographer companion. We’ll have gentle, short conversations to help you recall stories. When a question finishes, just answer in your own words, and when you pause I’ll ask a thoughtful follow-up. Take your time. Let’s begin.`
+const OPENING = `Hello and welcome to DadsBot. I’m your biographer companion. We’ll have gentle, short conversations to help you recall stories. When a question finishes, just answer in your own words, and when you pause I’ll ask a thoughtful follow-up. Take your time. Let’s begin.`
 
 export default function App(){
   const [state, setState] = useState('assistant:intro')
@@ -76,7 +76,7 @@ export default function App(){
 
   return (<>
     <header>
-      <div className="title">Dad’s Interview Bot <span className="statechip">{state}</span></div>
+      <div className="title">DadsBot <span className="statechip">{state}</span></div>
       <div className="toolbar">
         <input className="email" value={email} onChange={e=>setEmail(e.target.value)} />
         <button className="secondary" onClick={()=>setHistoryOpen(true)}>History</button>

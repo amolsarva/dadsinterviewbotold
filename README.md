@@ -1,4 +1,4 @@
-# Dad’s Interview Bot
+# DadsBot
 
 ## Product snapshot
 - **Purpose:** capture long-form oral histories with a warm, biographer tone grounded in the [Interview Guide](docs/interview-guide.md).

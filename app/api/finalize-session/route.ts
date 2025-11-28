@@ -345,7 +345,7 @@ export async function POST(req: NextRequest) {
       }
       const bodyText = bodyParts.filter((part) => typeof part === 'string' && part.length).join('\n')
       try {
-        emailStatus = await sendSummaryEmail(targetEmail, "Dad's Interview Bot - Session Summary", bodyText)
+        emailStatus = await sendSummaryEmail(targetEmail, 'DadsBot - Session Summary', bodyText)
       } catch (e: any) {
         emailStatus = { ok: false, provider: 'unknown', error: e?.message || 'send_failed' }
         flagFox({
