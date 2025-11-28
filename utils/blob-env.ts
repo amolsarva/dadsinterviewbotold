@@ -47,6 +47,26 @@ export function assertSupabaseEnv(options: BlobEnvAssertionOptions = {}) {
     logBlobDiagnostic('error', 'supabase-env-missing', { error: message, missing })
     throw new Error(message)
   }
+
+  try {
+    const parsed = new URL(snapshot.SUPABASE_URL!)
+    if (!parsed.protocol.startsWith('http')) {
+      throw new Error('SUPABASE_URL must include http/https')
+    }
+    if (!parsed.host.endsWith('.supabase.co') && !parsed.host.endsWith('.supabase.net')) {
+      throw new Error(`SUPABASE_URL host must end with .supabase.co or .supabase.net (received ${parsed.host})`)
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Invalid SUPABASE_URL'
+    logBlobDiagnostic('error', 'supabase-env-invalid-url', { error: message, snapshot: describeSupabaseEnvSnapshot(snapshot) })
+    throw new Error(message)
+  }
+
+  if (snapshot.SUPABASE_SERVICE_ROLE_KEY === 'YOUR_SUPABASE_SERVICE_ROLE_KEY') {
+    const message = 'SUPABASE_SERVICE_ROLE_KEY is using a placeholder value; provide a real key before running.'
+    logBlobDiagnostic('error', 'supabase-env-placeholder-key', { error: message })
+    throw new Error(message)
+  }
 }
 
 let cachedClient: SupabaseClient | null = null

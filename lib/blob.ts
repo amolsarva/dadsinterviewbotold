@@ -85,6 +85,116 @@ function getClientAndBucket() {
   return { client, bucket }
 }
 
+type BucketStatus = { exists: boolean; checkedAt: number }
+
+const bucketStatusCache = new Map<string, BucketStatus>()
+
+async function ensureBucketExists(client: ReturnType<typeof getSupabaseClient>, bucket: string, forceRefresh = false) {
+  const cached = bucketStatusCache.get(bucket)
+  if (cached && cached.exists && !forceRefresh) {
+    logBlobDiagnostic('log', 'supabase-bucket:cached', { bucket, checkedAt: new Date(cached.checkedAt).toISOString() })
+    return true
+  }
+
+  logBlobDiagnostic('log', 'supabase-bucket:verify-start', { bucket })
+  const { data, error: getError } = await client.storage.getBucket(bucket)
+  if (!getError && data) {
+    bucketStatusCache.set(bucket, { exists: true, checkedAt: Date.now() })
+    logBlobDiagnostic('log', 'supabase-bucket:exists', { bucket })
+    return true
+  }
+
+  if (getError && getError.status !== 404) {
+    logBlobDiagnostic('error', 'supabase-bucket:verify-failure', { bucket, error: getError.message, status: getError.status })
+    throw new Error(`Failed to verify Supabase bucket ${bucket}: ${getError.message}`)
+  }
+
+  logBlobDiagnostic('log', 'supabase-bucket:create-start', { bucket })
+  const { error: createError } = await client.storage.createBucket(bucket, { public: false })
+  if (createError) {
+    logBlobDiagnostic('error', 'supabase-bucket:create-failure', { bucket, error: createError.message, status: createError.status })
+    throw new Error(`Failed to create Supabase bucket ${bucket}: ${createError.message}`)
+  }
+  bucketStatusCache.set(bucket, { exists: true, checkedAt: Date.now() })
+  logBlobDiagnostic('log', 'supabase-bucket:create-success', { bucket })
+  return true
+}
+
+type RecoveryAction =
+  | 'none'
+  | 'bucket-created'
+  | 'retry-conflict'
+  | 'retry-transient'
+  | 'retry-bucket-creation'
+
+async function delay(ms: number) {
+  await new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+async function executeWithRecovery<T>(
+  operation: string,
+  bucket: string,
+  pathname: string,
+  fn: () => Promise<{ data: T | null; error: { message: string; status?: number } | null }>,
+) {
+  const client = getSupabaseClient()
+  await ensureBucketExists(client, bucket)
+
+  const maxAttempts = 3
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    let recovery: RecoveryAction = 'none'
+    const attemptMeta = { attempt, maxAttempts, bucket, pathname, operation }
+    logBlobDiagnostic('log', 'supabase-operation:attempt', attemptMeta)
+    const { data, error } = await fn()
+    if (!error) {
+      logBlobDiagnostic('log', 'supabase-operation:success', { ...attemptMeta, recovery })
+      return { data, recovery }
+    }
+
+    const status = error.status ?? null
+    const code = (error as any).code
+    const message = error.message || ''
+    const isNotFound = status === 404
+    const isConflict = status === 409 || code === 'duplicate' || /duplicate/i.test(message)
+    const isTransient = status === 0 || (status !== null && status >= 500)
+
+    if (isNotFound) {
+      recovery = 'retry-bucket-creation'
+      logBlobDiagnostic('error', 'supabase-operation:bucket-missing', { ...attemptMeta, status, error: error.message })
+      await ensureBucketExists(client, bucket, true)
+    } else if (isConflict) {
+      recovery = 'retry-conflict'
+      logBlobDiagnostic('error', 'supabase-operation:conflict', { ...attemptMeta, status, error: error.message })
+      const { error: removeError } = await client.storage.from(bucket).remove([pathname])
+      if (removeError) {
+        logBlobDiagnostic('error', 'supabase-operation:conflict-removal-failed', {
+          ...attemptMeta,
+          status: removeError.status,
+          error: removeError.message,
+        })
+      } else {
+        logBlobDiagnostic('log', 'supabase-operation:conflict-removed', { ...attemptMeta })
+      }
+    } else if (isTransient) {
+      recovery = 'retry-transient'
+      logBlobDiagnostic('error', 'supabase-operation:transient', { ...attemptMeta, status, error: error.message })
+    } else {
+      logBlobDiagnostic('error', 'supabase-operation:unrecoverable', { ...attemptMeta, status, error: error.message })
+      throw new Error(`Supabase ${operation} failed for ${pathname}: ${error.message}`)
+    }
+
+    if (attempt === maxAttempts) {
+      throw new Error(`Supabase ${operation} failed after ${maxAttempts} attempts for ${pathname}: ${error.message}`)
+    }
+
+    const backoffMs = Math.pow(2, attempt) * 250
+    logBlobDiagnostic('log', 'supabase-operation:backoff', { ...attemptMeta, backoffMs, recovery })
+    await delay(backoffMs)
+  }
+
+  throw new Error(`Supabase ${operation} failed for ${pathname}`)
+}
+
 export function getBlobEnvironment() {
   assertSupabaseEnv({ note: 'Reporting Supabase storage environment' })
   return {
@@ -108,17 +218,19 @@ export async function putBlobFromBuffer(
     size: buffer.byteLength,
     options,
   })
-  const { error, data } = await client.storage.from(bucket).upload(targetPath, buffer, {
-    contentType: contentType || 'application/octet-stream',
-    cacheControl: options.cacheControlMaxAge ? `${options.cacheControlMaxAge}` : undefined,
-    upsert: true,
-  })
-  if (error) {
-    logBlobDiagnostic('error', 'supabase-put:failure', { path: targetPath, bucket, error: error.message })
-    throw new Error(`Supabase upload failed for ${targetPath}: ${error.message}`)
-  }
+  const { data, recovery } = await executeWithRecovery(
+    'upload',
+    bucket,
+    targetPath,
+    () =>
+      client.storage.from(bucket).upload(targetPath, buffer, {
+        contentType: contentType || 'application/octet-stream',
+        cacheControl: options.cacheControlMaxAge ? `${options.cacheControlMaxAge}` : undefined,
+        upsert: true,
+      }),
+  )
   const publicUrl = client.storage.from(bucket).getPublicUrl(targetPath).data.publicUrl
-  logBlobDiagnostic('log', 'supabase-put:success', { path: targetPath, bucket, data, publicUrl })
+  logBlobDiagnostic('log', 'supabase-put:success', { path: targetPath, bucket, data, publicUrl, recovery })
   return {
     pathname: targetPath,
     url: publicUrl,
@@ -130,13 +242,12 @@ export async function putBlobFromBuffer(
 export async function listBlobs(options: ListCommandOptions = {}): Promise<ListBlobResult> {
   const { client, bucket } = getClientAndBucket()
   logBlobDiagnostic('log', 'supabase-list:start', { bucket, options })
-  const { data, error } = await client.storage.from(bucket).list(options.prefix ?? '', {
-    limit: options.limit ?? 100,
-  })
-  if (error) {
-    logBlobDiagnostic('error', 'supabase-list:failure', { bucket, error: error.message })
-    throw new Error(`Supabase list failed: ${error.message}`)
-  }
+  const { data } = await executeWithRecovery(
+    'list',
+    bucket,
+    options.prefix ?? '',
+    () => client.storage.from(bucket).list(options.prefix ?? '', { limit: options.limit ?? 100 }),
+  )
   const blobs: ListedBlob[] = (data || []).map((entry) => {
     const pathname = normalizePath(`${options.prefix ?? ''}${options.prefix ? '/' : ''}${entry.name}`)
     const publicUrl = client.storage.from(bucket).getPublicUrl(pathname).data.publicUrl
@@ -160,11 +271,7 @@ export async function deleteBlobsByPrefix(prefix: string): Promise<number> {
   const paths = list.blobs.map((blob) => blob.pathname)
   logBlobDiagnostic('log', 'supabase-delete-prefix:start', { bucket, prefix: normalized, count: paths.length })
   if (!paths.length) return 0
-  const { error } = await client.storage.from(bucket).remove(paths)
-  if (error) {
-    logBlobDiagnostic('error', 'supabase-delete-prefix:failure', { bucket, error: error.message })
-    throw new Error(`Supabase delete by prefix failed: ${error.message}`)
-  }
+  const { data } = await executeWithRecovery('delete-prefix', bucket, normalized, () => client.storage.from(bucket).remove(paths))
   logBlobDiagnostic('log', 'supabase-delete-prefix:success', { bucket, deleted: paths.length })
   return paths.length
 }
@@ -173,11 +280,7 @@ export async function deleteBlob(pathOrUrl: string): Promise<boolean> {
   const pathname = pathFromUrl(pathOrUrl)
   const { client, bucket } = getClientAndBucket()
   logBlobDiagnostic('log', 'supabase-delete:start', { bucket, pathname })
-  const { error } = await client.storage.from(bucket).remove([pathname])
-  if (error) {
-    logBlobDiagnostic('error', 'supabase-delete:failure', { bucket, pathname, error: error.message })
-    throw new Error(`Supabase delete failed for ${pathname}: ${error.message}`)
-  }
+  await executeWithRecovery('delete', bucket, pathname, () => client.storage.from(bucket).remove([pathname]))
   logBlobDiagnostic('log', 'supabase-delete:success', { bucket, pathname })
   return true
 }
@@ -186,10 +289,9 @@ export async function readBlob(pathOrUrl: string): Promise<ReadBlobResult | null
   const pathname = pathFromUrl(pathOrUrl)
   const { client, bucket } = getClientAndBucket()
   logBlobDiagnostic('log', 'supabase-read:start', { bucket, pathname })
-  const { data, error } = await client.storage.from(bucket).download(pathname)
-  if (error) {
-    logBlobDiagnostic('error', 'supabase-read:failure', { bucket, pathname, error: error.message })
-    throw new Error(`Supabase download failed for ${pathname}: ${error.message}`)
+  const { data } = await executeWithRecovery('download', bucket, pathname, () => client.storage.from(bucket).download(pathname))
+  if (!data) {
+    throw new Error(`Supabase download returned empty payload for ${pathname}`)
   }
   const arrayBuffer = await data.arrayBuffer()
   const buffer = Buffer.from(arrayBuffer)
