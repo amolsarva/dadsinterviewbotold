@@ -151,8 +151,9 @@ export async function GET(req: NextRequest) {
     logRoute('log', 'context:prime:complete', { primed })
 
     const env = getBlobEnvironment()
-    const envError = (env.error ?? null) as BlobErrorReport | null
-    const strictStorageEnabled = env.provider === 'netlify' && env.configured && !envError
+    const envError = (('error' in env ? (env as any).error : null) ?? null) as BlobErrorReport | null
+    const strictStorageEnabled =
+      (env as { provider?: string; configured?: boolean }).provider === 'netlify' && Boolean((env as any).configured) && !envError
     logRoute('log', 'strict-mode:status', {
       strictStorageEnabled,
       message: strictStorageEnabled
@@ -174,8 +175,11 @@ export async function GET(req: NextRequest) {
       steps: flowSteps,
     }
 
-    const hasNetlifyConfig = env.provider === 'netlify' && Boolean((env as any).store) && Boolean((env as any).siteId)
-    const canProbeNetlify = hasNetlifyConfig && env.configured && !envError
+    const hasNetlifyConfig =
+      (env as { provider?: string; store?: string; siteId?: string }).provider === 'netlify' &&
+      Boolean((env as any).store) &&
+      Boolean((env as any).siteId)
+    const canProbeNetlify = hasNetlifyConfig && Boolean((env as any).configured) && !envError
 
     if (hasNetlifyConfig && envError) {
       flowSteps.push({
@@ -192,6 +196,8 @@ export async function GET(req: NextRequest) {
     }
 
     if (canProbeNetlify) {
+      const netlifyEnv = env as Record<string, any>
+
       const basePath = `diagnostics/${probeId}`
       const sdkPath = `${basePath}/sdk-check.json`
       const sitePutPath = `${basePath}/site-proxy-check.json`
@@ -421,8 +427,8 @@ export async function GET(req: NextRequest) {
 
       // Step 6: Direct Netlify API PUT/GET/DELETE checks (optional but informative)
       const token = (process.env.NETLIFY_BLOBS_TOKEN || '').trim() || (process.env.NETLIFY_API_TOKEN || '').trim()
-      const siteId = env.siteId
-      const storeName = env.store
+      const siteId = netlifyEnv.siteId
+      const storeName = netlifyEnv.store
       const rawApiBase = process.env.NETLIFY_BLOBS_API_URL ? process.env.NETLIFY_BLOBS_API_URL.trim() : ''
       if (!rawApiBase) {
         const message = 'NETLIFY_BLOBS_API_URL is required for direct Netlify API diagnostics.'
@@ -583,7 +589,6 @@ export async function GET(req: NextRequest) {
           error: 'Missing NETLIFY_BLOBS_TOKEN or site/store identifiers; skipping direct API checks.',
         })
       }
-    }
     } else {
       flowSteps.push({
         id: 'netlify_config',
@@ -607,7 +612,7 @@ export async function GET(req: NextRequest) {
     if (ok) {
       message = `Netlify blob store "${(env as any).store || 'default'}" responded to SDK and proxy checks.`
     } else if (!hasNetlifyConfig) {
-      const missing = env.diagnostics?.missing?.length ? env.diagnostics.missing.join(', ') : null
+      const missing = (env as any).diagnostics?.missing?.length ? (env as any).diagnostics.missing.join(', ') : null
       message = missing
         ? `Storage is running in in-memory fallback mode. Missing configuration: ${missing}.`
         : 'Storage is running in in-memory fallback mode.'
@@ -617,7 +622,7 @@ export async function GET(req: NextRequest) {
         (typeof envError.message === 'string' && envError.message.trim()) ||
         'Failed to initialize Netlify blob storage. Check error details.'
     } else if (!health.ok || health.mode !== 'netlify') {
-      message = `Netlify storage health check failed: ${health.reason || 'unknown error'}`
+      message = `Netlify storage health check failed: ${(health as any).reason || health.error || 'unknown error'}`
     } else if (!flowOk && requiredFailures.length) {
       const first = requiredFailures[0]
       const statusLabel = typeof first.status === 'number' ? ` (HTTP ${first.status})` : ''
