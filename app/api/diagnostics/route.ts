@@ -41,12 +41,6 @@ const ENDPOINTS: EndpointSummary[] = [
     description: 'Connectivity test against the configured OpenAI model.',
   },
   {
-    key: 'tues',
-    method: 'POST',
-    path: '/api/diagnostics/tues',
-    description: 'Netlify-hosted credential diagnostic that mirrors the curl workflow for TUES.',
-  },
-  {
     key: 'smoke',
     method: 'POST',
     path: '/api/diagnostics/smoke',
