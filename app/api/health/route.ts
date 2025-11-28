@@ -94,11 +94,11 @@ export async function GET(request: Request) {
       storageProvider: storageEnv.provider,
       storageStore: (storageEnv as any).store ?? null,
       storageSiteId: (storageEnv as any).siteId ?? null,
-      storageError: storageEnv.error ?? null,
+      storageError: (storageEnv as any).error ?? null,
       hasResend: Boolean(process.env.RESEND_API_KEY),
       emailsEnabled: areSummaryEmailsEnabled(),
       defaultEmail,
-      blobDiagnostics: storageEnv.diagnostics,
+      blobDiagnostics: (storageEnv as any).diagnostics,
     }
 
     logDiagnostic('log', 'response:success', { blob, db, env })

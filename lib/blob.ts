@@ -1,5 +1,7 @@
 import { assertSupabaseEnv, describeSupabaseEnvSnapshot, getSupabaseBucket, getSupabaseClient, logBlobDiagnostic } from '@/utils/blob-env'
 
+export const BLOB_PROXY_PREFIX = '/api/blob/'
+
 export type PutBlobOptions = {
   access?: 'public'
   addRandomSuffix?: boolean
@@ -18,17 +20,20 @@ export type ListedBlob = {
 export type ListCommandOptions = {
   prefix?: string
   limit?: number
+  cursor?: string | null
 }
 
 export type ListBlobResult = {
   blobs: ListedBlob[]
   nextCursor: string | null
+  hasMore?: boolean
 }
 
 export type ReadBlobResult = {
   buffer: Buffer
   contentType: string
   uploadedAt?: string
+  etag?: string
   size?: number
   cacheControl?: string
 }
@@ -104,15 +109,17 @@ async function ensureBucketExists(client: ReturnType<typeof getSupabaseClient>, 
     return true
   }
 
-  if (getError && getError.status !== 404) {
-    logBlobDiagnostic('error', 'supabase-bucket:verify-failure', { bucket, error: getError.message, status: getError.status })
+  const getStatus = (getError as any)?.status
+  if (getError && getStatus !== 404) {
+    logBlobDiagnostic('error', 'supabase-bucket:verify-failure', { bucket, error: getError.message, status: getStatus })
     throw new Error(`Failed to verify Supabase bucket ${bucket}: ${getError.message}`)
   }
 
   logBlobDiagnostic('log', 'supabase-bucket:create-start', { bucket })
   const { error: createError } = await client.storage.createBucket(bucket, { public: false })
+  const createStatus = (createError as any)?.status
   if (createError) {
-    logBlobDiagnostic('error', 'supabase-bucket:create-failure', { bucket, error: createError.message, status: createError.status })
+    logBlobDiagnostic('error', 'supabase-bucket:create-failure', { bucket, error: createError.message, status: createStatus })
     throw new Error(`Failed to create Supabase bucket ${bucket}: ${createError.message}`)
   }
   bucketStatusCache.set(bucket, { exists: true, checkedAt: Date.now() })
@@ -166,10 +173,11 @@ async function executeWithRecovery<T>(
       recovery = 'retry-conflict'
       logBlobDiagnostic('error', 'supabase-operation:conflict', { ...attemptMeta, status, error: error.message })
       const { error: removeError } = await client.storage.from(bucket).remove([pathname])
+      const removeStatus = (removeError as any)?.status
       if (removeError) {
         logBlobDiagnostic('error', 'supabase-operation:conflict-removal-failed', {
           ...attemptMeta,
-          status: removeError.status,
+          status: removeStatus,
           error: removeError.message,
         })
       } else {
@@ -242,6 +250,12 @@ export async function putBlobFromBuffer(
 export async function listBlobs(options: ListCommandOptions = {}): Promise<ListBlobResult> {
   const { client, bucket } = getClientAndBucket()
   logBlobDiagnostic('log', 'supabase-list:start', { bucket, options })
+  if (options.cursor) {
+    logBlobDiagnostic('error', 'supabase-list:cursor-unsupported', {
+      cursor: options.cursor,
+      note: 'Supabase storage API does not support cursor-based pagination; cursor will be ignored.',
+    })
+  }
   const { data } = await executeWithRecovery(
     'list',
     bucket,
@@ -256,12 +270,12 @@ export async function listBlobs(options: ListCommandOptions = {}): Promise<ListB
       url: publicUrl,
       downloadUrl: publicUrl,
       uploadedAt: entry.created_at ? new Date(entry.created_at) : undefined,
-      size: entry.metadata?.size ?? entry.size,
+      size: entry.metadata?.size ?? (entry as any).size,
       metadata: entry.metadata ?? undefined,
     }
   })
   logBlobDiagnostic('log', 'supabase-list:success', { bucket, count: blobs.length })
-  return { blobs, nextCursor: null }
+  return { blobs, nextCursor: null, hasMore: false }
 }
 
 export async function deleteBlobsByPrefix(prefix: string): Promise<number> {

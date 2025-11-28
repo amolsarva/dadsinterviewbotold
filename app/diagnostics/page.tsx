@@ -71,6 +71,14 @@ type BlobFlowStep = {
   responseSnippet?: string
 }
 
+type RemediationOutcome = 'ok' | 'warn' | 'error'
+type RemediationStep = {
+  label: string
+  outcome: RemediationOutcome
+  detail?: string
+  suggestion?: string
+}
+
 type BlobFlowDiagnostics = {
   ok: boolean
   probeId?: string

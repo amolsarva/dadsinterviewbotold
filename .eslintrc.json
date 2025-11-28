@@ -1,4 +1,3 @@
-## touching to redeploy ##
 {
   "extends": "next/core-web-vitals"
 }
