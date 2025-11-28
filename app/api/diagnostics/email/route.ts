@@ -6,7 +6,7 @@ import { resolveDefaultNotifyEmailServer } from '@/lib/default-notify-email.serv
 export async function POST() {
   try {
     const to = resolveDefaultNotifyEmailServer()
-    const subject = 'Interview Bot – Test Email'
+    const subject = 'DadsBot – Test Email'
     const body = 'This is a test email from /api/diagnostics/email.'
     const status = await sendSummaryEmail(to, subject, body)
 

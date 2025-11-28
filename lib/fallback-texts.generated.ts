@@ -7,7 +7,7 @@ export const FALLBACK_TEXTS = {
   "introFlow": {
     "returningGreetingWithTitles": "Welcome back—I'm keeping your stories about {TITLES} safe for you.",
     "returningGreetingDefault": "Welcome back—your archive is open and I'm ready whenever you are.",
-    "firstTimeGreeting": "Hi, I'm Dad's Interview Bot. I'm here to help you capture the memories you want to keep.",
+    "firstTimeGreeting": "Hi, I'm DadsBot. I'm here to help you capture the memories you want to keep.",
     "latestDetailReminder": "The last thing you shared was about {DETAIL}.",
     "noDetailPromise": "I'll remember every detail you share from this moment on.",
     "returningInvitation": "When you are ready, …",
@@ -33,7 +33,7 @@ export const FALLBACK_TEXTS = {
     "finalGuard": "Tell me one detail you have not shared with me yet."
   },
   "askTurn": {
-    "firstSessionGreeting": "Hi, I'm Dad's Interview Bot. I'm here to help you save the stories and small details your family will want to revisit. When it feels right, would you start with a memory you'd like me to remember?",
+    "firstSessionGreeting": "Hi, I'm DadsBot. I'm here to help you save the stories and small details your family will want to revisit. When it feels right, would you start with a memory you'd like me to remember?",
     "returningWithHighlight": "Welcome back. I'm still holding onto what you told me about {HIGHLIGHT}. Let's add another chapter to your archive.",
     "returningDefault": "Welcome back—your story archive is open and I'm keeping track of everything you've trusted me with.",
     "providerException": "Who else was there? Share a first name and one detail about them."

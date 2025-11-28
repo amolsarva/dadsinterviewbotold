@@ -34,7 +34,7 @@ type DebugPanelProps = {
   userHandle?: string
 }
 
-const DEFAULT_TEXT_SNIPPET = 'Debug blob test from the Dad\'s Interview Bot debugging console.'
+const DEFAULT_TEXT_SNIPPET = "Debug blob test from the DadsBot debugging console."
 
 function encodeBlobPath(path: string): string {
   return path

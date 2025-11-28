@@ -1,4 +1,4 @@
-Project: Dad’s Interview Bot — Continuity True-Up (Drop-in Safe)
+Project: DadsBot — Continuity True-Up (Drop-in Safe)
 
 Keep invariant:
 - Single state machine: Idle → Recording → Thinking → Playing → ReadyToContinue → DoneSuccess

@@ -45,7 +45,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <script dangerouslySetInnerHTML={{ __html: deploymentBootstrapScript }} />
         <div className="site-shell">
           <header className="site-header">
-            <h1 className="site-title">Dad&apos;s Interview Bot</h1>
+            <h1 className="site-title">DadsBot</h1>
             <SiteNav />
           </header>
           <div className="panel-section">{children}</div>
