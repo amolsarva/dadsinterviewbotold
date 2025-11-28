@@ -144,6 +144,33 @@ function truncateSnippet(text: string, limit = 200) {
   return `${slice}…`
 }
 
+export function diagnosticTimestamp() {
+  return new Date().toISOString()
+}
+
+export function diagnosticEnvSummary() {
+  return {
+    nodeEnv: process.env.NODE_ENV || '__missing__',
+    vercel: process.env.VERCEL || '__missing__',
+    vercelEnv: process.env.VERCEL_ENV || '__missing__',
+    netlify: process.env.NETLIFY || '__missing__',
+    netlifyDev: process.env.NETLIFY_DEV || '__missing__',
+    supabaseUrl: process.env.SUPABASE_URL ? `${process.env.SUPABASE_URL.length} chars` : '__missing__',
+    supabaseBucket: process.env.SUPABASE_STORAGE_BUCKET || '__missing__',
+    blobSiteId: process.env.NETLIFY_BLOBS_SITE_ID || '__missing__',
+  }
+}
+
+function describeError(err: unknown) {
+  if (err instanceof Error) {
+    return { message: err.message, name: err.name, stack: err.stack }
+  }
+  if (err && typeof err === 'object') {
+    return { message: (err as any).message ?? String(err), blobDetails: (err as any).blobDetails }
+  }
+  return { message: String(err) }
+}
+
 type StageDefinition = {
   id: string
   title: string
@@ -629,41 +656,10 @@ function buildSessionManifestPayload(session: RememberedSession) {
 }
 
 async function persistSessionSnapshot(session: RememberedSession) {
+  const manifest = buildSessionManifestPayload(session)
   const manifestPath = sessionManifestPath(session.id)
-  const startedAt = new Date().toISOString()
-
+  const timestamp = diagnosticTimestamp()
   try {
-    const bucket = getSupabaseBucket()
-    logBlobDiagnostic('log', 'session-manifest:prepare', {
-      sessionId: session.id,
-      manifestPath,
-      bucket,
-      startedAt,
-      step: 'build-payload',
-    })
-
-    const manifest = buildSessionManifestPayload(session)
-
-    logBlobDiagnostic('log', 'session-manifest:delete:attempt', {
-      sessionId: session.id,
-      manifestPath,
-      bucket,
-      step: 'delete-existing-before-upload',
-    })
-    await deleteBlob(manifestPath)
-    logBlobDiagnostic('log', 'session-manifest:delete:success', {
-      sessionId: session.id,
-      manifestPath,
-      bucket,
-      step: 'delete-existing-before-upload',
-    })
-
-    logBlobDiagnostic('log', 'session-manifest:upload:attempt', {
-      sessionId: session.id,
-      manifestPath,
-      bucket,
-      step: 'upload-with-upsert',
-    })
     const blob = await putBlobFromBuffer(
       manifestPath,
       Buffer.from(JSON.stringify(manifest, null, 2), 'utf8'),
@@ -671,30 +667,28 @@ async function persistSessionSnapshot(session: RememberedSession) {
       { access: 'public' },
     )
     const manifestUrl = blob.downloadUrl || blob.url
-
-    logBlobDiagnostic('log', 'session-manifest:upload:success', {
-      sessionId: session.id,
-      manifestPath,
-      bucket,
-      manifestUrl,
-      step: 'upload-with-upsert',
-    })
-
-    if (manifestUrl) {
-      session.artifacts = {
-        ...(session.artifacts || {}),
-        session_manifest: manifestUrl,
-        manifest: manifestUrl,
-      }
-    }
+    console.log(
+      `[diagnostic] ${timestamp} session:persist:snapshot:success ${JSON.stringify({
+        sessionId: session.id,
+        manifestPath,
+        env: diagnosticEnvSummary(),
+        manifestUrl: manifestUrl ?? '__missing__',
+      })}`,
+    )
+    return manifestUrl
   } catch (err) {
-    const errorDetails = err instanceof Error ? { message: err.message, stack: err.stack } : { error: err }
-    console.error('[diagnostic]', new Date().toISOString(), 'session-manifest:failure', {
+    const diagnosticPayload = {
       sessionId: session.id,
       manifestPath,
-      error: errorDetails,
-    })
-    throw err
+      env: diagnosticEnvSummary(),
+      error: describeError(err),
+    }
+    console.error(`[diagnostic] ${timestamp} session:persist:snapshot:failure ${JSON.stringify(diagnosticPayload)}`)
+    const error = new Error(
+      `[diagnostic] ${timestamp} session manifest persistence failed for session ${session.id}. Check diagnostics logs for env and blob details.`,
+    )
+    ;(error as any).diagnostic = diagnosticPayload
+    throw error
   }
 }
 
@@ -740,10 +734,34 @@ export async function appendTurn(id: string, turn: Partial<Turn>) {
     text: turn.text || '',
     audio_blob_url: turn.audio_blob_url,
   }
-  if (!s.turns) s.turns = []
-  s.turns.push(t)
-  s.total_turns = s.turns.length
-  await persistSessionSnapshot(s)
+  const nextTurns = [...(s.turns || []), t]
+  const snapshot: RememberedSession = {
+    ...s,
+    turns: nextTurns,
+    total_turns: nextTurns.length,
+  }
+  let manifestUrl: string | undefined
+  try {
+    manifestUrl = await persistSessionSnapshot(snapshot)
+  } catch (err) {
+    const diagnosticPayload = {
+      sessionId: id,
+      env: diagnosticEnvSummary(),
+      error: { ...describeError(err), cause: (err as any)?.diagnostic?.error },
+      step: 'appendTurn.persist',
+    }
+    console.error(`[diagnostic] ${diagnosticTimestamp()} session:append:error ${JSON.stringify(diagnosticPayload)}`)
+    throw err
+  }
+  s.turns = nextTurns
+  s.total_turns = nextTurns.length
+  if (manifestUrl) {
+    s.artifacts = {
+      ...(s.artifacts || {}),
+      session_manifest: manifestUrl,
+      manifest: manifestUrl,
+    }
+  }
   return t
 }
 
