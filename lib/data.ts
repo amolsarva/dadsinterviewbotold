@@ -42,6 +42,7 @@ const globalKey = '__dads_interview_mem__'
 const bootKey = '__dads_interview_mem_boot__'
 const primerMapKey = '__dads_interview_memory_primers__'
 const hydrationKey = '__dads_interview_mem_hydrated__'
+const hydrationDiagnosticsKey = '__dads_interview_mem_hydration_diag__'
 type PrimerState = { text: string; url?: string; updatedAt?: string; loaded: boolean }
 const g: any = globalThis as any
 if (!g[globalKey]) {
@@ -56,11 +57,19 @@ if (!g[primerMapKey]) {
 if (!g[hydrationKey]) {
   g[hydrationKey] = { attempted: false, hydrated: false }
 }
+if (!g[hydrationDiagnosticsKey]) {
+  g[hydrationDiagnosticsKey] = { errors: [], lastAttemptedAt: null, lastHydratedAt: null }
+}
 const mem: { sessions: Map<string, RememberedSession> } = g[globalKey]
 const memBootedAt: string = g[bootKey]
 
 const primerStates: Map<string, PrimerState> = g[primerMapKey]
 const hydrationState: { attempted: boolean; hydrated: boolean } = g[hydrationKey]
+const hydrationDiagnostics: {
+  errors: { step: string; message: string; blobDetails?: unknown; timestamp: string }[]
+  lastAttemptedAt: string | null
+  lastHydratedAt: string | null
+} = g[hydrationDiagnosticsKey]
 
 const MEMORY_PRIMER_PREFIX = 'memory/primers'
 const LEGACY_MEMORY_PRIMER_PATH = 'memory/MemoryPrimer.txt'
@@ -369,6 +378,12 @@ async function ensurePrimerLoadedFromStorage(handle?: string | null) {
 }
 
 async function hydrateSessionsFromBlobs() {
+  hydrationDiagnostics.errors = []
+  hydrationDiagnostics.lastAttemptedAt = new Date().toISOString()
+  logBlobDiagnostic('log', 'session-hydration:start', {
+    attemptedAt: hydrationDiagnostics.lastAttemptedAt,
+    bootedAt: memBootedAt,
+  })
   try {
     const { blobs } = await listBlobs({ prefix: 'sessions/', limit: 2000 })
     const manifests = blobs.filter((b) => /session-.+\.json$/.test(b.pathname))
@@ -401,14 +416,33 @@ async function hydrateSessionsFromBlobs() {
       }
     }
     hydrationState.hydrated = true
+    hydrationDiagnostics.lastHydratedAt = new Date().toISOString()
+    logBlobDiagnostic('log', 'session-hydration:complete', {
+      hydratedAt: hydrationDiagnostics.lastHydratedAt,
+      sessionCount: mem.sessions.size,
+    })
   } catch (err) {
-    console.warn(
-      'Failed to list session manifests',
-      err,
-      err && typeof err === 'object' ? (err as any).blobDetails : undefined,
-    )
+    const errorMessage = err instanceof Error ? err.message : 'Failed to list session manifests'
+    hydrationDiagnostics.errors.push({
+      step: 'list-session-manifests',
+      message: errorMessage,
+      blobDetails: err && typeof err === 'object' ? (err as any).blobDetails : undefined,
+      timestamp: new Date().toISOString(),
+    })
+    logBlobDiagnostic('error', 'session-hydration:error', {
+      step: 'list-session-manifests',
+      error: errorMessage,
+      blobDetails: err && typeof err === 'object' ? (err as any).blobDetails : undefined,
+    })
+    throw err
   } finally {
     hydrationState.attempted = true
+    logBlobDiagnostic('log', 'session-hydration:finished', {
+      attemptedAt: hydrationDiagnostics.lastAttemptedAt,
+      hydrated: hydrationState.hydrated,
+      sessionCount: mem.sessions.size,
+      errors: hydrationDiagnostics.errors,
+    })
   }
 }
 
@@ -423,6 +457,17 @@ export async function ensureSessionMemoryHydrated() {
     await hydrationPromise
   } finally {
     hydrationPromise = null
+  }
+}
+
+export function getHydrationDiagnostics() {
+  return {
+    attempted: hydrationState.attempted,
+    hydrated: hydrationState.hydrated,
+    lastAttemptedAt: hydrationDiagnostics.lastAttemptedAt,
+    lastHydratedAt: hydrationDiagnostics.lastHydratedAt,
+    errors: [...hydrationDiagnostics.errors],
+    sessionCount: mem.sessions.size,
   }
 }
 
