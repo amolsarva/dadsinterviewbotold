@@ -157,6 +157,22 @@ export function diagnosticTimestamp() {
   return new Date().toISOString()
 }
 
+function logDiagnostic(
+  level: 'log' | 'error',
+  event: string,
+  payload?: Record<string, unknown>,
+) {
+  const timestamp = diagnosticTimestamp()
+  const env = diagnosticEnvSummary()
+  const enrichedPayload = payload && 'env' in payload ? payload : { ...(payload || {}), env }
+  const message = `[diagnostic] ${timestamp} ${event} ${JSON.stringify(enrichedPayload)}`
+  if (level === 'error') {
+    console.error(message)
+  } else {
+    console.log(message)
+  }
+}
+
 export function diagnosticEnvSummary() {
   return {
     nodeEnv: process.env.NODE_ENV || '__missing__',
@@ -337,6 +353,7 @@ async function ensurePrimerLoadedFromStorage(handle?: string | null) {
     return
   }
   const loadPromise = (async () => {
+    logDiagnostic('log', 'primer:load:start', { key, primerPath: memoryPrimerPathForKey(key) })
     try {
       const primerPath = memoryPrimerPathForKey(key)
       const { blobs } = await listBlobs({ prefix: primerPath, limit: 1 })
@@ -360,11 +377,11 @@ async function ensurePrimerLoadedFromStorage(handle?: string | null) {
           : undefined,
       )
     } catch (err) {
-      console.warn(
-        'Failed to load memory primer from storage',
-        err,
-        err && typeof err === 'object' ? (err as any).blobDetails : undefined,
-      )
+      logDiagnostic('error', 'primer:load:failure', {
+        key,
+        primerPath: memoryPrimerPathForKey(key),
+        error: describeError(err),
+      })
     } finally {
       state.loaded = true
     }
@@ -378,20 +395,43 @@ async function ensurePrimerLoadedFromStorage(handle?: string | null) {
 }
 
 async function hydrateSessionsFromBlobs() {
-  hydrationDiagnostics.errors = []
-  hydrationDiagnostics.lastAttemptedAt = new Date().toISOString()
-  logBlobDiagnostic('log', 'session-hydration:start', {
-    attemptedAt: hydrationDiagnostics.lastAttemptedAt,
-    bootedAt: memBootedAt,
-  })
+  const timestamp = diagnosticTimestamp()
+  const env = diagnosticEnvSummary()
+  logDiagnostic('log', 'session:hydrate:start', { env })
+
   try {
-    const { blobs } = await listBlobs({ prefix: 'sessions/', limit: 2000 })
+    const { blobs } = await listBlobs({ prefix: 'sessions/', limit: 2000 }).catch((error) => {
+      const diagnosticPayload = { env, error: describeError(error) }
+      logDiagnostic('error', 'session:hydrate:list-failed', diagnosticPayload)
+      const err = new Error(
+        `[diagnostic] ${timestamp} failed to list session manifests; hydration aborted. Inspect diagnostics for blob service errors.`,
+      )
+      ;(err as any).diagnostic = diagnosticPayload
+      throw err
+    })
+
     const manifests = blobs.filter((b) => /session-.+\.json$/.test(b.pathname))
+    let loadedCount = 0
+
+    logDiagnostic('log', 'session:hydrate:list-success', {
+      env,
+      totalBlobs: blobs.length,
+      manifestCount: manifests.length,
+    })
+
     for (const manifest of manifests) {
       try {
         const url = manifest.downloadUrl || manifest.url
         const resp = await fetch(url)
-        if (!resp.ok) continue
+        if (!resp.ok) {
+          logDiagnostic('error', 'session:hydrate:manifest-fetch-failed', {
+            env,
+            manifestPath: manifest.pathname,
+            status: resp.status,
+            statusText: resp.statusText,
+          })
+          continue
+        }
         const data = await resp.json()
         const fallbackId = manifest.pathname.replace(/^sessions\//, '').split('/')[0] || data?.sessionId
         const uploadedAt =
@@ -401,39 +441,54 @@ async function hydrateSessionsFromBlobs() {
             ? manifest.uploadedAt
             : undefined
         const storedId = rememberSessionManifest(data, fallbackId, uploadedAt, url)
-        if (storedId) continue
-        if (fallbackId && mem.sessions.has(fallbackId)) continue
+        if (storedId) {
+          loadedCount += 1
+          continue
+        }
+        if (fallbackId && mem.sessions.has(fallbackId)) {
+          loadedCount += 1
+          continue
+        }
         const derived = buildSessionFromManifest(data, fallbackId, uploadedAt)
         if (derived) {
           mem.sessions.set(derived.id, { ...derived, turns: derived.turns ? [...derived.turns] : [] })
+          loadedCount += 1
         }
       } catch (err) {
-        console.warn(
-          'Failed to parse session manifest',
-          err,
-          err && typeof err === 'object' ? (err as any).blobDetails : undefined,
-        )
+        logDiagnostic('error', 'session:hydrate:manifest-parse-failed', {
+          env,
+          manifestPath: manifest.pathname,
+          error: describeError(err),
+        })
       }
     }
-    hydrationState.hydrated = true
-    hydrationDiagnostics.lastHydratedAt = new Date().toISOString()
-    logBlobDiagnostic('log', 'session-hydration:complete', {
-      hydratedAt: hydrationDiagnostics.lastHydratedAt,
-      sessionCount: mem.sessions.size,
+
+    if (manifests.length > 0 && loadedCount === 0) {
+      const diagnosticPayload = {
+        env,
+        totalBlobs: blobs.length,
+        manifestCount: manifests.length,
+        loadedCount,
+      }
+      logDiagnostic('error', 'session:hydrate:empty', diagnosticPayload)
+      const err = new Error(
+        `[diagnostic] ${timestamp} session hydration found manifests but loaded zero sessions. Preventing empty memory usage; see diagnostics for blob details.`,
+      )
+      ;(err as any).diagnostic = diagnosticPayload
+      hydrationState.hydrated = false
+      throw err
+    }
+
+    hydrationState.hydrated = loadedCount > 0
+    logDiagnostic('log', 'session:hydrate:complete', {
+      env,
+      totalBlobs: blobs.length,
+      manifestCount: manifests.length,
+      loadedCount,
+      hydrated: hydrationState.hydrated,
     })
   } catch (err) {
-    const errorMessage = err instanceof Error ? err.message : 'Failed to list session manifests'
-    hydrationDiagnostics.errors.push({
-      step: 'list-session-manifests',
-      message: errorMessage,
-      blobDetails: err && typeof err === 'object' ? (err as any).blobDetails : undefined,
-      timestamp: new Date().toISOString(),
-    })
-    logBlobDiagnostic('error', 'session-hydration:error', {
-      step: 'list-session-manifests',
-      error: errorMessage,
-      blobDetails: err && typeof err === 'object' ? (err as any).blobDetails : undefined,
-    })
+    logDiagnostic('error', 'session:hydrate:failure', { env, error: describeError(err) })
     throw err
   } finally {
     hydrationState.attempted = true
@@ -460,14 +515,14 @@ export async function ensureSessionMemoryHydrated() {
   }
 }
 
-export function getHydrationDiagnostics() {
-  return {
-    attempted: hydrationState.attempted,
-    hydrated: hydrationState.hydrated,
-    lastAttemptedAt: hydrationDiagnostics.lastAttemptedAt,
-    lastHydratedAt: hydrationDiagnostics.lastHydratedAt,
-    errors: [...hydrationDiagnostics.errors],
-    sessionCount: mem.sessions.size,
+async function requireHydration(context: string) {
+  const timestamp = diagnosticTimestamp()
+  try {
+    await ensureSessionMemoryHydrated()
+  } catch (err) {
+    const diagnosticPayload = { context, env: diagnosticEnvSummary(), error: describeError(err) }
+    logDiagnostic('error', `session:hydrate:${context}:failure`, { ...diagnosticPayload, timestamp })
+    throw err
   }
 }
 
@@ -629,7 +684,7 @@ export async function createSession({
   email_to: string
   user_handle?: string | null
 }): Promise<Session> {
-  await ensureSessionMemoryHydrated().catch(() => undefined)
+  await requireHydration('createSession')
   const normalizedHandle = normalizeHandle(user_handle ?? undefined) ?? null
   await getMemoryPrimer(normalizedHandle).catch(() => undefined)
   const s: RememberedSession = {
@@ -656,7 +711,10 @@ export async function createSession({
   try {
     await persistSessionSnapshot(s)
   } catch (err) {
-    console.warn('Failed to persist initial session manifest', err, (err as any)?.blobDetails)
+    logDiagnostic('error', 'session:persist:initial:failure', {
+      sessionId: s.id,
+      error: describeError(err),
+    })
   }
   return s
 }
@@ -704,17 +762,13 @@ async function persistSessionSnapshot(session: RememberedSession) {
   const manifest = buildSessionManifestPayload(session)
   const manifestPath = sessionManifestPath(session.id)
   const timestamp = diagnosticTimestamp()
-  console.log(
-    `[diagnostic] ${timestamp} session:persist:snapshot:prep ${JSON.stringify({ sessionId: session.id, manifestPath })}`,
-  )
+  logDiagnostic('log', 'session:persist:snapshot:prep', { sessionId: session.id, manifestPath })
   await deleteBlob(manifestPath).catch((error) => {
-    console.error(
-      `[diagnostic] ${timestamp} session:persist:snapshot:prep-delete-failed ${JSON.stringify({
-        sessionId: session.id,
-        manifestPath,
-        error: describeError(error),
-      })}`,
-    )
+    logDiagnostic('error', 'session:persist:snapshot:prep-delete-failed', {
+      sessionId: session.id,
+      manifestPath,
+      error: describeError(error),
+    })
   })
   try {
     const blob = await putBlobFromBuffer(
@@ -724,14 +778,12 @@ async function persistSessionSnapshot(session: RememberedSession) {
       { access: 'public' },
     )
     const manifestUrl = blob.downloadUrl || blob.url
-    console.log(
-      `[diagnostic] ${timestamp} session:persist:snapshot:success ${JSON.stringify({
-        sessionId: session.id,
-        manifestPath,
-        env: diagnosticEnvSummary(),
-        manifestUrl: manifestUrl ?? '__missing__',
-      })}`,
-    )
+    logDiagnostic('log', 'session:persist:snapshot:success', {
+      sessionId: session.id,
+      manifestPath,
+      env: diagnosticEnvSummary(),
+      manifestUrl: manifestUrl ?? '__missing__',
+    })
     return manifestUrl
   } catch (err) {
     const diagnosticPayload = {
@@ -740,7 +792,7 @@ async function persistSessionSnapshot(session: RememberedSession) {
       env: diagnosticEnvSummary(),
       error: describeError(err),
     }
-    console.error(`[diagnostic] ${timestamp} session:persist:snapshot:failure ${JSON.stringify(diagnosticPayload)}`)
+    logDiagnostic('error', 'session:persist:snapshot:failure', diagnosticPayload)
     const error = new Error(
       `[diagnostic] ${timestamp} session manifest persistence failed for session ${session.id}. Check diagnostics logs for env and blob details.`,
     )
@@ -752,7 +804,7 @@ async function persistSessionSnapshot(session: RememberedSession) {
 export async function appendTurn(id: string, turn: Partial<Turn>) {
   let s = mem.sessions.get(id)
   if (!s) {
-    await ensureSessionMemoryHydrated().catch(() => undefined)
+    await requireHydration('appendTurn')
     s = mem.sessions.get(id)
   }
 
@@ -807,7 +859,7 @@ export async function appendTurn(id: string, turn: Partial<Turn>) {
       error: { ...describeError(err), cause: (err as any)?.diagnostic?.error },
       step: 'appendTurn.persist',
     }
-    console.error(`[diagnostic] ${diagnosticTimestamp()} session:append:error ${JSON.stringify(diagnosticPayload)}`)
+    logDiagnostic('error', 'session:append:error', diagnosticPayload)
     throw err
   }
   s.turns = nextTurns
@@ -836,7 +888,7 @@ export async function finalizeSession(
   id: string,
   body: { clientDurationMs: number; sessionAudioUrl?: string | null },
 ): Promise<FinalizeSessionResult> {
-  await ensureSessionMemoryHydrated().catch(() => undefined)
+  await requireHydration('finalizeSession')
   const s = mem.sessions.get(id)
   if (!s) {
     flagFox({
@@ -972,7 +1024,10 @@ export async function finalizeSession(
   mem.sessions.set(id, s)
 
   await rebuildMemoryPrimer(s.user_handle ?? null).catch((err) => {
-    console.warn('Failed to rebuild memory primer', err, (err as any)?.blobDetails)
+    logDiagnostic('error', 'primer:rebuild:failure', {
+      handle: normalizeHandle(s.user_handle ?? undefined) ?? 'unassigned',
+      error: describeError(err),
+    })
   })
 
   const emailed = !!('ok' in emailStatus && emailStatus.ok)
@@ -1009,7 +1064,7 @@ export async function deleteSession(
     return { ok: false, deleted: false, reason: 'invalid_id' }
   }
 
-  await ensureSessionMemoryHydrated().catch(() => undefined)
+  await requireHydration('deleteSession')
 
   let session = mem.sessions.get(id)
   if (!session) {
@@ -1032,11 +1087,10 @@ export async function deleteSession(
       const deleted = await deleteBlob(url)
       if (deleted) removed = true
     } catch (err) {
-      console.warn('Failed to delete session artifact blob', {
+      logDiagnostic('error', 'session:delete:artifact-failure', {
         id,
         url,
-        err,
-        blobDetails: err && typeof err === 'object' ? (err as any).blobDetails : undefined,
+        error: describeError(err),
       })
     }
   }
@@ -1049,11 +1103,10 @@ export async function deleteSession(
         removed = true
       }
     } catch (err) {
-      console.warn('Failed to delete blobs for prefix', {
+      logDiagnostic('error', 'session:delete:prefix-failure', {
         id,
         prefix,
-        err,
-        blobDetails: err && typeof err === 'object' ? (err as any).blobDetails : undefined,
+        error: describeError(err),
       })
     }
   }
@@ -1073,18 +1126,45 @@ export async function deleteSession(
     )
     if (hasRemainingForHandle) {
       await rebuildMemoryPrimer(deletedHandle).catch((err) => {
-        console.warn('Failed to rebuild memory primer after deletion', err, (err as any)?.blobDetails)
+        logDiagnostic('error', 'primer:rebuild:failure', {
+          handle: normalizeHandle(deletedHandle ?? undefined) ?? 'unassigned',
+          error: describeError(err),
+        })
       })
     } else {
-      await deleteBlob(memoryPrimerPathForKey(deletedHandleKey)).catch(() => undefined)
+      await deleteBlob(memoryPrimerPathForKey(deletedHandleKey)).catch((err) =>
+        logDiagnostic('error', 'primer:delete:failure', {
+          handle: normalizeHandle(deletedHandle ?? undefined) ?? 'unassigned',
+          path: memoryPrimerPathForKey(deletedHandleKey),
+          error: describeError(err),
+        }),
+      )
       if (deletedHandleKey === 'unassigned') {
-        await deleteBlob(LEGACY_MEMORY_PRIMER_PATH).catch(() => undefined)
+        await deleteBlob(LEGACY_MEMORY_PRIMER_PATH).catch((err) =>
+          logDiagnostic('error', 'primer:delete:failure', {
+            handle: 'unassigned',
+            path: LEGACY_MEMORY_PRIMER_PATH,
+            error: describeError(err),
+          }),
+        )
       }
       resetPrimerState(deletedHandleKey)
     }
   } else if (mem.sessions.size === 0) {
-    await deleteBlob(LEGACY_MEMORY_PRIMER_PATH).catch(() => undefined)
-    await deleteBlob(memoryPrimerPathForKey('unassigned')).catch(() => undefined)
+    await deleteBlob(LEGACY_MEMORY_PRIMER_PATH).catch((err) =>
+      logDiagnostic('error', 'primer:delete:failure', {
+        handle: 'unassigned',
+        path: LEGACY_MEMORY_PRIMER_PATH,
+        error: describeError(err),
+      }),
+    )
+    await deleteBlob(memoryPrimerPathForKey('unassigned')).catch((err) =>
+      logDiagnostic('error', 'primer:delete:failure', {
+        handle: 'unassigned',
+        path: memoryPrimerPathForKey('unassigned'),
+        error: describeError(err),
+      }),
+    )
     resetPrimerState()
   }
 
@@ -1095,7 +1175,7 @@ export async function deleteSession(
 }
 
 export async function clearAllSessions(): Promise<{ ok: boolean }> {
-  await ensureSessionMemoryHydrated().catch(() => undefined)
+  await requireHydration('clearAllSessions')
 
   mem.sessions.clear()
 
@@ -1105,16 +1185,21 @@ export async function clearAllSessions(): Promise<{ ok: boolean }> {
       try {
         await deleteBlobsByPrefix(prefix)
       } catch (err) {
-        console.warn('Failed to delete blobs during clearAllSessions', {
+        logDiagnostic('error', 'session:clear-all:prefix-failure', {
           prefix,
-          err,
-          blobDetails: err && typeof err === 'object' ? (err as any).blobDetails : undefined,
+          error: describeError(err),
         })
       }
     }),
   )
 
-  await deleteBlob(LEGACY_MEMORY_PRIMER_PATH).catch(() => undefined)
+  await deleteBlob(LEGACY_MEMORY_PRIMER_PATH).catch((err) =>
+    logDiagnostic('error', 'primer:delete:failure', {
+      handle: 'unassigned',
+      path: LEGACY_MEMORY_PRIMER_PATH,
+      error: describeError(err),
+    }),
+  )
   resetPrimerState()
   hydrationState.attempted = true
   hydrationState.hydrated = true
@@ -1125,7 +1210,7 @@ export async function clearAllSessions(): Promise<{ ok: boolean }> {
 export async function deleteSessionsByHandle(
   handle?: string | null,
 ): Promise<{ ok: boolean; deleted: number }> {
-  await ensureSessionMemoryHydrated().catch(() => undefined)
+  await requireHydration('deleteSessionsByHandle')
   const normalizedHandle = normalizeHandle(handle ?? undefined)
   const idsToDelete: string[] = []
   for (const session of mem.sessions.values()) {
@@ -1144,8 +1229,12 @@ export async function deleteSessionsByHandle(
     try {
       const result = await deleteSession(id)
       if (result.deleted) deleted += 1
-    } catch {
-      // ignore errors so one bad session doesn't block others
+    } catch (err) {
+      logDiagnostic('error', 'session:delete-by-handle:failure', {
+        handle: normalizedHandle ?? 'unassigned',
+        sessionId: id,
+        error: describeError(err),
+      })
     }
   }
 
@@ -1153,7 +1242,7 @@ export async function deleteSessionsByHandle(
 }
 
 export async function listSessions(handle?: string | null): Promise<Session[]> {
-  await ensureSessionMemoryHydrated().catch(() => undefined)
+  await requireHydration('listSessions')
   const normalizedHandle = normalizeHandle(handle ?? undefined)
   const seen = new Map<string, RememberedSession>()
   for (const session of mem.sessions.values()) {
@@ -1169,7 +1258,7 @@ export async function listSessions(handle?: string | null): Promise<Session[]> {
 }
 
 export async function listUserHandles(options: { limit?: number } = {}): Promise<string[]> {
-  await ensureSessionMemoryHydrated().catch(() => undefined)
+  await requireHydration('listUserHandles')
   const limitParam = Number.isFinite(options.limit ?? NaN) ? Number(options.limit) : NaN
   const limit = Number.isFinite(limitParam) && limitParam > 0 ? Math.min(Math.floor(limitParam), 24) : 12
 
@@ -1280,13 +1369,28 @@ export function __dangerousResetMemoryState() {
 }
 
 async function fetchSessionManifest(sessionId: string): Promise<ManifestLookup | null> {
+  const timestamp = diagnosticTimestamp()
+  logDiagnostic('log', 'session:manifest:fetch:start', { sessionId })
   try {
-    const { blobs } = await listBlobs({ prefix: `sessions/${sessionId}/`, limit: 25 })
+    const prefix = `sessions/${sessionId}/`
+    const { blobs } = await listBlobs({ prefix, limit: 25 })
     const manifest = blobs.find((b) => /session-.+\.json$/.test(b.pathname))
-    if (!manifest) return null
+    if (!manifest) {
+      logDiagnostic('log', 'session:manifest:fetch:not-found', { sessionId, prefix, blobCount: blobs.length })
+      return null
+    }
     const url = manifest.downloadUrl || manifest.url
     const resp = await fetch(url)
-    if (!resp.ok) return null
+    if (!resp.ok) {
+      logDiagnostic('error', 'session:manifest:fetch:http-failure', {
+        sessionId,
+        prefix,
+        manifestPath: manifest.pathname,
+        status: resp.status,
+        statusText: resp.statusText,
+      })
+      throw new Error(`[diagnostic] ${timestamp} failed to fetch manifest ${manifest.pathname} for session ${sessionId}`)
+    }
     const data = await resp.json()
     return {
       id: (typeof data?.sessionId === 'string' && data.sessionId) || sessionId,
@@ -1300,8 +1404,13 @@ async function fetchSessionManifest(sessionId: string): Promise<ManifestLookup |
       data,
     }
   } catch (err) {
-    console.warn('Failed to fetch session manifest', err, (err as any)?.blobDetails)
-    return null
+    const diagnosticPayload = { sessionId, env: diagnosticEnvSummary(), error: describeError(err) }
+    logDiagnostic('error', 'session:manifest:fetch:failure', diagnosticPayload)
+    const error = new Error(
+      `[diagnostic] ${timestamp} failed to fetch session manifest for session ${sessionId}; see diagnostic logs for env and blob details.`,
+    )
+    ;(error as any).diagnostic = diagnosticPayload
+    throw error
   }
 }
 
