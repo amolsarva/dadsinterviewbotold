@@ -348,6 +348,20 @@ const requestNewSessionId = async (handle?: string | null): Promise<NetworkSessi
     handle: handle ?? null,
     sessionId: id,
   })
+
+  const persistedCheck = readStoredSessionId(handle)
+  if (persistedCheck === id) {
+    logSessionDiagnostic('log', 'Session identifier verified in sessionStorage.', {
+      handle: handle ?? null,
+      sessionId: id,
+    })
+  } else {
+    logSessionDiagnostic('error', 'Session identifier mismatch after persistence.', {
+      handle: handle ?? null,
+      expected: id,
+      stored: persistedCheck ?? null,
+    })
+  }
   return { id, source: 'network' }
 }
 
@@ -1713,7 +1727,22 @@ export function Home({ userHandle }: { userHandle?: string }) {
 
   const startSession = useCallback(async () => {
     if (hasStarted) return
-    if (!sessionId) return
+    if (!sessionId || !sessionId.trim()) {
+      const message = 'Intro request aborted: missing session identifier.'
+      logSessionDiagnostic('error', message, {
+        handle: normalizedHandle ?? null,
+        storedSessionId: readStoredSessionId(normalizedHandle),
+        cookies:
+          typeof document === 'undefined'
+            ? null
+            : truncateForLog(document.cookie || '(no cookies)', 200),
+      })
+      recordFatal('Session unavailable — cannot request intro.', [
+        'The app could not find a session identifier before starting.',
+        'Run Diagnostics to confirm session storage and try again.',
+      ])
+      return
+    }
     if (startupErrorRef.current || fatalErrorRef.current) return
     conversationRef.current = []
     setFinishRequested(false)
@@ -1721,6 +1750,29 @@ export function Home({ userHandle }: { userHandle?: string }) {
     setManualStopRequested(false)
     manualStopRef.current = false
     setHasStarted(true)
+    const storedSessionId = readStoredSessionId(normalizedHandle)
+    const cookiePreview =
+      typeof document === 'undefined' ? null : truncateForLog(document.cookie || '(no cookies)', 200)
+
+    logSessionDiagnostic('log', 'Preparing intro request with session context.', {
+      handle: normalizedHandle ?? null,
+      sessionId,
+      storedSessionId: storedSessionId ?? null,
+      cookies: cookiePreview,
+    })
+    if (storedSessionId && storedSessionId !== sessionId) {
+      logSessionDiagnostic('error', 'Session identifier mismatch between memory and storage.', {
+        handle: normalizedHandle ?? null,
+        inMemory: sessionId,
+        stored: storedSessionId,
+      })
+    } else if (!storedSessionId) {
+      logSessionDiagnostic('error', 'No stored session identifier found prior to intro request.', {
+        handle: normalizedHandle ?? null,
+        inMemory: sessionId,
+        cookies: cookiePreview,
+      })
+    }
     const introPrepStartedAt = Date.now()
     const ensureIntroDelay = async () => {
       const elapsed = Date.now() - introPrepStartedAt
@@ -1836,6 +1888,27 @@ export function Home({ userHandle }: { userHandle?: string }) {
     } catch {}
 
     await ensureIntroDelay()
+    const preTtsStoredSessionId = readStoredSessionId(normalizedHandle)
+    const preTtsCookies =
+      typeof document === 'undefined' ? null : truncateForLog(document.cookie || '(no cookies)', 200)
+    logSessionDiagnostic('log', 'Intro ready; verifying session context before playback.', {
+      handle: normalizedHandle ?? null,
+      sessionId,
+      storedSessionId: preTtsStoredSessionId ?? null,
+      cookies: preTtsCookies,
+    })
+    if (!sessionId || !sessionId.trim()) {
+      logSessionDiagnostic('error', 'TTS playback blocked: missing session identifier.', {
+        handle: normalizedHandle ?? null,
+        storedSessionId: preTtsStoredSessionId ?? null,
+        cookies: preTtsCookies,
+      })
+      recordFatal('Session lost before playback — diagnostics required.', [
+        'The app could not confirm your session before starting text-to-speech.',
+        'Verify cookies/storage and try restarting the conversation.',
+      ])
+      return
+    }
     pushLog('Intro message ready → playing')
     let introPlaybackStarted = false
     updateMachineState('speakingPrep')
@@ -1889,6 +1962,7 @@ export function Home({ userHandle }: { userHandle?: string }) {
     pushLog,
     recordFatal,
     runTurnLoop,
+    normalizedHandle,
     sessionId,
     startupErrorRef,
     stopAutoAdvance,
