@@ -369,14 +369,47 @@ async function ensurePrimerLoadedFromStorage(handle?: string | null) {
 }
 
 async function hydrateSessionsFromBlobs() {
+  const timestamp = diagnosticTimestamp()
+  const env = diagnosticEnvSummary()
+  console.log(`[diagnostic] ${timestamp} session:hydrate:start ${JSON.stringify({ env })}`)
+
   try {
-    const { blobs } = await listBlobs({ prefix: 'sessions/', limit: 2000 })
+    const { blobs } = await listBlobs({ prefix: 'sessions/', limit: 2000 }).catch((error) => {
+      const diagnosticPayload = { env, error: describeError(error) }
+      console.error(`[diagnostic] ${timestamp} session:hydrate:list-failed ${JSON.stringify(diagnosticPayload)}`)
+      const err = new Error(
+        `[diagnostic] ${timestamp} failed to list session manifests; hydration aborted. Inspect diagnostics for blob service errors.`,
+      )
+      ;(err as any).diagnostic = diagnosticPayload
+      throw err
+    })
+
     const manifests = blobs.filter((b) => /session-.+\.json$/.test(b.pathname))
+    let loadedCount = 0
+
+    console.log(
+      `[diagnostic] ${timestamp} session:hydrate:list-success ${JSON.stringify({
+        env,
+        totalBlobs: blobs.length,
+        manifestCount: manifests.length,
+      })}`,
+    )
+
     for (const manifest of manifests) {
       try {
         const url = manifest.downloadUrl || manifest.url
         const resp = await fetch(url)
-        if (!resp.ok) continue
+        if (!resp.ok) {
+          console.error(
+            `[diagnostic] ${timestamp} session:hydrate:manifest-fetch-failed ${JSON.stringify({
+              env,
+              manifestPath: manifest.pathname,
+              status: resp.status,
+              statusText: resp.statusText,
+            })}`,
+          )
+          continue
+        }
         const data = await resp.json()
         const fallbackId = manifest.pathname.replace(/^sessions\//, '').split('/')[0] || data?.sessionId
         const uploadedAt =
@@ -386,27 +419,61 @@ async function hydrateSessionsFromBlobs() {
             ? manifest.uploadedAt
             : undefined
         const storedId = rememberSessionManifest(data, fallbackId, uploadedAt, url)
-        if (storedId) continue
-        if (fallbackId && mem.sessions.has(fallbackId)) continue
+        if (storedId) {
+          loadedCount += 1
+          continue
+        }
+        if (fallbackId && mem.sessions.has(fallbackId)) {
+          loadedCount += 1
+          continue
+        }
         const derived = buildSessionFromManifest(data, fallbackId, uploadedAt)
         if (derived) {
           mem.sessions.set(derived.id, { ...derived, turns: derived.turns ? [...derived.turns] : [] })
+          loadedCount += 1
         }
       } catch (err) {
-        console.warn(
-          'Failed to parse session manifest',
-          err,
-          err && typeof err === 'object' ? (err as any).blobDetails : undefined,
+        console.error(
+          `[diagnostic] ${timestamp} session:hydrate:manifest-parse-failed ${JSON.stringify({
+            env,
+            manifestPath: manifest.pathname,
+            error: describeError(err),
+          })}`,
         )
       }
     }
-    hydrationState.hydrated = true
-  } catch (err) {
-    console.warn(
-      'Failed to list session manifests',
-      err,
-      err && typeof err === 'object' ? (err as any).blobDetails : undefined,
+
+    if (manifests.length > 0 && loadedCount === 0) {
+      const diagnosticPayload = {
+        env,
+        totalBlobs: blobs.length,
+        manifestCount: manifests.length,
+        loadedCount,
+      }
+      console.error(`[diagnostic] ${timestamp} session:hydrate:empty ${JSON.stringify(diagnosticPayload)}`)
+      const err = new Error(
+        `[diagnostic] ${timestamp} session hydration found manifests but loaded zero sessions. Preventing empty memory usage; see diagnostics for blob details.`,
+      )
+      ;(err as any).diagnostic = diagnosticPayload
+      hydrationState.hydrated = false
+      throw err
+    }
+
+    hydrationState.hydrated = loadedCount > 0
+    console.log(
+      `[diagnostic] ${timestamp} session:hydrate:complete ${JSON.stringify({
+        env,
+        totalBlobs: blobs.length,
+        manifestCount: manifests.length,
+        loadedCount,
+        hydrated: hydrationState.hydrated,
+      })}`,
     )
+  } catch (err) {
+    console.error(
+      `[diagnostic] ${timestamp} session:hydrate:failure ${JSON.stringify({ env, error: describeError(err) })}`,
+    )
+    throw err
   } finally {
     hydrationState.attempted = true
   }
@@ -423,6 +490,17 @@ export async function ensureSessionMemoryHydrated() {
     await hydrationPromise
   } finally {
     hydrationPromise = null
+  }
+}
+
+async function requireHydration(context: string) {
+  const timestamp = diagnosticTimestamp()
+  try {
+    await ensureSessionMemoryHydrated()
+  } catch (err) {
+    const diagnosticPayload = { context, env: diagnosticEnvSummary(), error: describeError(err) }
+    console.error(`[diagnostic] ${timestamp} session:hydrate:${context}:failure ${JSON.stringify(diagnosticPayload)}`)
+    throw err
   }
 }
 
@@ -584,7 +662,7 @@ export async function createSession({
   email_to: string
   user_handle?: string | null
 }): Promise<Session> {
-  await ensureSessionMemoryHydrated().catch(() => undefined)
+  await requireHydration('createSession')
   const normalizedHandle = normalizeHandle(user_handle ?? undefined) ?? null
   await getMemoryPrimer(normalizedHandle).catch(() => undefined)
   const s: RememberedSession = {
@@ -707,7 +785,7 @@ async function persistSessionSnapshot(session: RememberedSession) {
 export async function appendTurn(id: string, turn: Partial<Turn>) {
   let s = mem.sessions.get(id)
   if (!s) {
-    await ensureSessionMemoryHydrated().catch(() => undefined)
+    await requireHydration('appendTurn')
     s = mem.sessions.get(id)
   }
 
@@ -791,7 +869,7 @@ export async function finalizeSession(
   id: string,
   body: { clientDurationMs: number; sessionAudioUrl?: string | null },
 ): Promise<FinalizeSessionResult> {
-  await ensureSessionMemoryHydrated().catch(() => undefined)
+  await requireHydration('finalizeSession')
   const s = mem.sessions.get(id)
   if (!s) {
     flagFox({
@@ -964,7 +1042,7 @@ export async function deleteSession(
     return { ok: false, deleted: false, reason: 'invalid_id' }
   }
 
-  await ensureSessionMemoryHydrated().catch(() => undefined)
+  await requireHydration('deleteSession')
 
   let session = mem.sessions.get(id)
   if (!session) {
@@ -1050,7 +1128,7 @@ export async function deleteSession(
 }
 
 export async function clearAllSessions(): Promise<{ ok: boolean }> {
-  await ensureSessionMemoryHydrated().catch(() => undefined)
+  await requireHydration('clearAllSessions')
 
   mem.sessions.clear()
 
@@ -1080,7 +1158,7 @@ export async function clearAllSessions(): Promise<{ ok: boolean }> {
 export async function deleteSessionsByHandle(
   handle?: string | null,
 ): Promise<{ ok: boolean; deleted: number }> {
-  await ensureSessionMemoryHydrated().catch(() => undefined)
+  await requireHydration('deleteSessionsByHandle')
   const normalizedHandle = normalizeHandle(handle ?? undefined)
   const idsToDelete: string[] = []
   for (const session of mem.sessions.values()) {
@@ -1108,7 +1186,7 @@ export async function deleteSessionsByHandle(
 }
 
 export async function listSessions(handle?: string | null): Promise<Session[]> {
-  await ensureSessionMemoryHydrated().catch(() => undefined)
+  await requireHydration('listSessions')
   const normalizedHandle = normalizeHandle(handle ?? undefined)
   const seen = new Map<string, RememberedSession>()
   for (const session of mem.sessions.values()) {
@@ -1124,7 +1202,7 @@ export async function listSessions(handle?: string | null): Promise<Session[]> {
 }
 
 export async function listUserHandles(options: { limit?: number } = {}): Promise<string[]> {
-  await ensureSessionMemoryHydrated().catch(() => undefined)
+  await requireHydration('listUserHandles')
   const limitParam = Number.isFinite(options.limit ?? NaN) ? Number(options.limit) : NaN
   const limit = Number.isFinite(limitParam) && limitParam > 0 ? Math.min(Math.floor(limitParam), 24) : 12
 
