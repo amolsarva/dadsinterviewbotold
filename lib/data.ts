@@ -42,6 +42,7 @@ const globalKey = '__dads_interview_mem__'
 const bootKey = '__dads_interview_mem_boot__'
 const primerMapKey = '__dads_interview_memory_primers__'
 const hydrationKey = '__dads_interview_mem_hydrated__'
+const hydrationDiagnosticsKey = '__dads_interview_mem_hydration_diag__'
 type PrimerState = { text: string; url?: string; updatedAt?: string; loaded: boolean }
 const g: any = globalThis as any
 if (!g[globalKey]) {
@@ -56,11 +57,19 @@ if (!g[primerMapKey]) {
 if (!g[hydrationKey]) {
   g[hydrationKey] = { attempted: false, hydrated: false }
 }
+if (!g[hydrationDiagnosticsKey]) {
+  g[hydrationDiagnosticsKey] = { errors: [], lastAttemptedAt: null, lastHydratedAt: null }
+}
 const mem: { sessions: Map<string, RememberedSession> } = g[globalKey]
 const memBootedAt: string = g[bootKey]
 
 const primerStates: Map<string, PrimerState> = g[primerMapKey]
 const hydrationState: { attempted: boolean; hydrated: boolean } = g[hydrationKey]
+const hydrationDiagnostics: {
+  errors: { step: string; message: string; blobDetails?: unknown; timestamp: string }[]
+  lastAttemptedAt: string | null
+  lastHydratedAt: string | null
+} = g[hydrationDiagnosticsKey]
 
 const MEMORY_PRIMER_PREFIX = 'memory/primers'
 const LEGACY_MEMORY_PRIMER_PATH = 'memory/MemoryPrimer.txt'
@@ -483,6 +492,12 @@ async function hydrateSessionsFromBlobs() {
     throw err
   } finally {
     hydrationState.attempted = true
+    logBlobDiagnostic('log', 'session-hydration:finished', {
+      attemptedAt: hydrationDiagnostics.lastAttemptedAt,
+      hydrated: hydrationState.hydrated,
+      sessionCount: mem.sessions.size,
+      errors: hydrationDiagnostics.errors,
+    })
   }
 }
 
