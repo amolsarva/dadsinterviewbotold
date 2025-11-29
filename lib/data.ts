@@ -148,6 +148,22 @@ export function diagnosticTimestamp() {
   return new Date().toISOString()
 }
 
+function logDiagnostic(
+  level: 'log' | 'error',
+  event: string,
+  payload?: Record<string, unknown>,
+) {
+  const timestamp = diagnosticTimestamp()
+  const env = diagnosticEnvSummary()
+  const enrichedPayload = payload && 'env' in payload ? payload : { ...(payload || {}), env }
+  const message = `[diagnostic] ${timestamp} ${event} ${JSON.stringify(enrichedPayload)}`
+  if (level === 'error') {
+    console.error(message)
+  } else {
+    console.log(message)
+  }
+}
+
 export function diagnosticEnvSummary() {
   return {
     nodeEnv: process.env.NODE_ENV || '__missing__',
@@ -371,12 +387,12 @@ async function ensurePrimerLoadedFromStorage(handle?: string | null) {
 async function hydrateSessionsFromBlobs() {
   const timestamp = diagnosticTimestamp()
   const env = diagnosticEnvSummary()
-  console.log(`[diagnostic] ${timestamp} session:hydrate:start ${JSON.stringify({ env })}`)
+  logDiagnostic('log', 'session:hydrate:start', { env })
 
   try {
     const { blobs } = await listBlobs({ prefix: 'sessions/', limit: 2000 }).catch((error) => {
       const diagnosticPayload = { env, error: describeError(error) }
-      console.error(`[diagnostic] ${timestamp} session:hydrate:list-failed ${JSON.stringify(diagnosticPayload)}`)
+      logDiagnostic('error', 'session:hydrate:list-failed', diagnosticPayload)
       const err = new Error(
         `[diagnostic] ${timestamp} failed to list session manifests; hydration aborted. Inspect diagnostics for blob service errors.`,
       )
@@ -387,27 +403,23 @@ async function hydrateSessionsFromBlobs() {
     const manifests = blobs.filter((b) => /session-.+\.json$/.test(b.pathname))
     let loadedCount = 0
 
-    console.log(
-      `[diagnostic] ${timestamp} session:hydrate:list-success ${JSON.stringify({
-        env,
-        totalBlobs: blobs.length,
-        manifestCount: manifests.length,
-      })}`,
-    )
+    logDiagnostic('log', 'session:hydrate:list-success', {
+      env,
+      totalBlobs: blobs.length,
+      manifestCount: manifests.length,
+    })
 
     for (const manifest of manifests) {
       try {
         const url = manifest.downloadUrl || manifest.url
         const resp = await fetch(url)
         if (!resp.ok) {
-          console.error(
-            `[diagnostic] ${timestamp} session:hydrate:manifest-fetch-failed ${JSON.stringify({
-              env,
-              manifestPath: manifest.pathname,
-              status: resp.status,
-              statusText: resp.statusText,
-            })}`,
-          )
+          logDiagnostic('error', 'session:hydrate:manifest-fetch-failed', {
+            env,
+            manifestPath: manifest.pathname,
+            status: resp.status,
+            statusText: resp.statusText,
+          })
           continue
         }
         const data = await resp.json()
@@ -433,13 +445,11 @@ async function hydrateSessionsFromBlobs() {
           loadedCount += 1
         }
       } catch (err) {
-        console.error(
-          `[diagnostic] ${timestamp} session:hydrate:manifest-parse-failed ${JSON.stringify({
-            env,
-            manifestPath: manifest.pathname,
-            error: describeError(err),
-          })}`,
-        )
+        logDiagnostic('error', 'session:hydrate:manifest-parse-failed', {
+          env,
+          manifestPath: manifest.pathname,
+          error: describeError(err),
+        })
       }
     }
 
@@ -450,7 +460,7 @@ async function hydrateSessionsFromBlobs() {
         manifestCount: manifests.length,
         loadedCount,
       }
-      console.error(`[diagnostic] ${timestamp} session:hydrate:empty ${JSON.stringify(diagnosticPayload)}`)
+      logDiagnostic('error', 'session:hydrate:empty', diagnosticPayload)
       const err = new Error(
         `[diagnostic] ${timestamp} session hydration found manifests but loaded zero sessions. Preventing empty memory usage; see diagnostics for blob details.`,
       )
@@ -460,19 +470,15 @@ async function hydrateSessionsFromBlobs() {
     }
 
     hydrationState.hydrated = loadedCount > 0
-    console.log(
-      `[diagnostic] ${timestamp} session:hydrate:complete ${JSON.stringify({
-        env,
-        totalBlobs: blobs.length,
-        manifestCount: manifests.length,
-        loadedCount,
-        hydrated: hydrationState.hydrated,
-      })}`,
-    )
+    logDiagnostic('log', 'session:hydrate:complete', {
+      env,
+      totalBlobs: blobs.length,
+      manifestCount: manifests.length,
+      loadedCount,
+      hydrated: hydrationState.hydrated,
+    })
   } catch (err) {
-    console.error(
-      `[diagnostic] ${timestamp} session:hydrate:failure ${JSON.stringify({ env, error: describeError(err) })}`,
-    )
+    logDiagnostic('error', 'session:hydrate:failure', { env, error: describeError(err) })
     throw err
   } finally {
     hydrationState.attempted = true
@@ -737,17 +743,13 @@ async function persistSessionSnapshot(session: RememberedSession) {
   const manifest = buildSessionManifestPayload(session)
   const manifestPath = sessionManifestPath(session.id)
   const timestamp = diagnosticTimestamp()
-  console.log(
-    `[diagnostic] ${timestamp} session:persist:snapshot:prep ${JSON.stringify({ sessionId: session.id, manifestPath })}`,
-  )
+  logDiagnostic('log', 'session:persist:snapshot:prep', { sessionId: session.id, manifestPath })
   await deleteBlob(manifestPath).catch((error) => {
-    console.error(
-      `[diagnostic] ${timestamp} session:persist:snapshot:prep-delete-failed ${JSON.stringify({
-        sessionId: session.id,
-        manifestPath,
-        error: describeError(error),
-      })}`,
-    )
+    logDiagnostic('error', 'session:persist:snapshot:prep-delete-failed', {
+      sessionId: session.id,
+      manifestPath,
+      error: describeError(error),
+    })
   })
   try {
     const blob = await putBlobFromBuffer(
@@ -757,14 +759,12 @@ async function persistSessionSnapshot(session: RememberedSession) {
       { access: 'public' },
     )
     const manifestUrl = blob.downloadUrl || blob.url
-    console.log(
-      `[diagnostic] ${timestamp} session:persist:snapshot:success ${JSON.stringify({
-        sessionId: session.id,
-        manifestPath,
-        env: diagnosticEnvSummary(),
-        manifestUrl: manifestUrl ?? '__missing__',
-      })}`,
-    )
+    logDiagnostic('log', 'session:persist:snapshot:success', {
+      sessionId: session.id,
+      manifestPath,
+      env: diagnosticEnvSummary(),
+      manifestUrl: manifestUrl ?? '__missing__',
+    })
     return manifestUrl
   } catch (err) {
     const diagnosticPayload = {
@@ -773,7 +773,7 @@ async function persistSessionSnapshot(session: RememberedSession) {
       env: diagnosticEnvSummary(),
       error: describeError(err),
     }
-    console.error(`[diagnostic] ${timestamp} session:persist:snapshot:failure ${JSON.stringify(diagnosticPayload)}`)
+    logDiagnostic('error', 'session:persist:snapshot:failure', diagnosticPayload)
     const error = new Error(
       `[diagnostic] ${timestamp} session manifest persistence failed for session ${session.id}. Check diagnostics logs for env and blob details.`,
     )
@@ -840,7 +840,7 @@ export async function appendTurn(id: string, turn: Partial<Turn>) {
       error: { ...describeError(err), cause: (err as any)?.diagnostic?.error },
       step: 'appendTurn.persist',
     }
-    console.error(`[diagnostic] ${diagnosticTimestamp()} session:append:error ${JSON.stringify(diagnosticPayload)}`)
+    logDiagnostic('error', 'session:append:error', diagnosticPayload)
     throw err
   }
   s.turns = nextTurns
@@ -1313,13 +1313,28 @@ export function __dangerousResetMemoryState() {
 }
 
 async function fetchSessionManifest(sessionId: string): Promise<ManifestLookup | null> {
+  const timestamp = diagnosticTimestamp()
+  logDiagnostic('log', 'session:manifest:fetch:start', { sessionId })
   try {
-    const { blobs } = await listBlobs({ prefix: `sessions/${sessionId}/`, limit: 25 })
+    const prefix = `sessions/${sessionId}/`
+    const { blobs } = await listBlobs({ prefix, limit: 25 })
     const manifest = blobs.find((b) => /session-.+\.json$/.test(b.pathname))
-    if (!manifest) return null
+    if (!manifest) {
+      logDiagnostic('log', 'session:manifest:fetch:not-found', { sessionId, prefix, blobCount: blobs.length })
+      return null
+    }
     const url = manifest.downloadUrl || manifest.url
     const resp = await fetch(url)
-    if (!resp.ok) return null
+    if (!resp.ok) {
+      logDiagnostic('error', 'session:manifest:fetch:http-failure', {
+        sessionId,
+        prefix,
+        manifestPath: manifest.pathname,
+        status: resp.status,
+        statusText: resp.statusText,
+      })
+      throw new Error(`[diagnostic] ${timestamp} failed to fetch manifest ${manifest.pathname} for session ${sessionId}`)
+    }
     const data = await resp.json()
     return {
       id: (typeof data?.sessionId === 'string' && data.sessionId) || sessionId,
@@ -1333,8 +1348,13 @@ async function fetchSessionManifest(sessionId: string): Promise<ManifestLookup |
       data,
     }
   } catch (err) {
-    console.warn('Failed to fetch session manifest', err, (err as any)?.blobDetails)
-    return null
+    const diagnosticPayload = { sessionId, env: diagnosticEnvSummary(), error: describeError(err) }
+    logDiagnostic('error', 'session:manifest:fetch:failure', diagnosticPayload)
+    const error = new Error(
+      `[diagnostic] ${timestamp} failed to fetch session manifest for session ${sessionId}; see diagnostic logs for env and blob details.`,
+    )
+    ;(error as any).diagnostic = diagnosticPayload
+    throw error
   }
 }
 
