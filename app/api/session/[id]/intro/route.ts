@@ -1,5 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { ensureSessionMemoryHydrated, getMemoryPrimer, getSessionMemorySnapshot } from '@/lib/data'
+import {
+  ensureSessionMemoryHydrated,
+  getHydrationDiagnostics,
+  getMemoryPrimer,
+  getSessionMemorySnapshot,
+} from '@/lib/data'
 import { primeNetlifyBlobContextFromHeaders } from '@/lib/blob'
 import { collectAskedQuestions, findLatestUserDetails, normalizeQuestion, pickFallbackQuestion } from '@/lib/question-memory'
 import {
@@ -107,10 +112,43 @@ function buildHistorySummary(
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
   primeNetlifyBlobContextFromHeaders(req.headers)
   const sessionId = params.id
-  logIntro('log', 'session-intro:request:start', { sessionId, hypotheses: introHypotheses })
-  await ensureSessionMemoryHydrated().catch(() => undefined)
+  logIntro('log', 'session-intro:request:start', {
+    sessionId,
+    hypotheses: introHypotheses,
+    hydration: getHydrationDiagnostics(),
+  })
+
+  const hydrationBefore = getHydrationDiagnostics()
+  if (!hydrationBefore.attempted || !hydrationBefore.hydrated) {
+    logIntro('log', 'session-intro:hydration:pending', { sessionId, hydration: hydrationBefore })
+    try {
+      await ensureSessionMemoryHydrated()
+      logIntro('log', 'session-intro:hydration:completed', {
+        sessionId,
+        hydration: getHydrationDiagnostics(),
+      })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'session hydration failed'
+      logIntro('error', 'session-intro:hydration:error', {
+        sessionId,
+        hydration: getHydrationDiagnostics(),
+        message,
+        stack: error instanceof Error ? error.stack : undefined,
+      })
+    }
+  } else {
+    logIntro('log', 'session-intro:hydration:already-complete', { sessionId, hydration: hydrationBefore })
+  }
+
   const { current, sessions } = getSessionMemorySnapshot(sessionId)
   if (!current) {
+    const hydration = getHydrationDiagnostics()
+    logIntro('error', 'session-intro:session-not-found', {
+      sessionId,
+      hydration,
+      sessionCount: hydration.sessionCount,
+      hydrationErrors: hydration.errors,
+    })
     return NextResponse.json({ ok: false, error: 'session_not_found' }, { status: 404 })
   }
 
