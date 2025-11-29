@@ -344,6 +344,7 @@ async function ensurePrimerLoadedFromStorage(handle?: string | null) {
     return
   }
   const loadPromise = (async () => {
+    logDiagnostic('log', 'primer:load:start', { key, primerPath: memoryPrimerPathForKey(key) })
     try {
       const primerPath = memoryPrimerPathForKey(key)
       const { blobs } = await listBlobs({ prefix: primerPath, limit: 1 })
@@ -367,11 +368,11 @@ async function ensurePrimerLoadedFromStorage(handle?: string | null) {
           : undefined,
       )
     } catch (err) {
-      console.warn(
-        'Failed to load memory primer from storage',
-        err,
-        err && typeof err === 'object' ? (err as any).blobDetails : undefined,
-      )
+      logDiagnostic('error', 'primer:load:failure', {
+        key,
+        primerPath: memoryPrimerPathForKey(key),
+        error: describeError(err),
+      })
     } finally {
       state.loaded = true
     }
@@ -505,7 +506,7 @@ async function requireHydration(context: string) {
     await ensureSessionMemoryHydrated()
   } catch (err) {
     const diagnosticPayload = { context, env: diagnosticEnvSummary(), error: describeError(err) }
-    console.error(`[diagnostic] ${timestamp} session:hydrate:${context}:failure ${JSON.stringify(diagnosticPayload)}`)
+    logDiagnostic('error', `session:hydrate:${context}:failure`, { ...diagnosticPayload, timestamp })
     throw err
   }
 }
@@ -695,7 +696,10 @@ export async function createSession({
   try {
     await persistSessionSnapshot(s)
   } catch (err) {
-    console.warn('Failed to persist initial session manifest', err, (err as any)?.blobDetails)
+    logDiagnostic('error', 'session:persist:initial:failure', {
+      sessionId: s.id,
+      error: describeError(err),
+    })
   }
   return s
 }
@@ -1005,7 +1009,10 @@ export async function finalizeSession(
   mem.sessions.set(id, s)
 
   await rebuildMemoryPrimer(s.user_handle ?? null).catch((err) => {
-    console.warn('Failed to rebuild memory primer', err, (err as any)?.blobDetails)
+    logDiagnostic('error', 'primer:rebuild:failure', {
+      handle: normalizeHandle(s.user_handle ?? undefined) ?? 'unassigned',
+      error: describeError(err),
+    })
   })
 
   const emailed = !!('ok' in emailStatus && emailStatus.ok)
@@ -1065,11 +1072,10 @@ export async function deleteSession(
       const deleted = await deleteBlob(url)
       if (deleted) removed = true
     } catch (err) {
-      console.warn('Failed to delete session artifact blob', {
+      logDiagnostic('error', 'session:delete:artifact-failure', {
         id,
         url,
-        err,
-        blobDetails: err && typeof err === 'object' ? (err as any).blobDetails : undefined,
+        error: describeError(err),
       })
     }
   }
@@ -1082,11 +1088,10 @@ export async function deleteSession(
         removed = true
       }
     } catch (err) {
-      console.warn('Failed to delete blobs for prefix', {
+      logDiagnostic('error', 'session:delete:prefix-failure', {
         id,
         prefix,
-        err,
-        blobDetails: err && typeof err === 'object' ? (err as any).blobDetails : undefined,
+        error: describeError(err),
       })
     }
   }
@@ -1106,18 +1111,45 @@ export async function deleteSession(
     )
     if (hasRemainingForHandle) {
       await rebuildMemoryPrimer(deletedHandle).catch((err) => {
-        console.warn('Failed to rebuild memory primer after deletion', err, (err as any)?.blobDetails)
+        logDiagnostic('error', 'primer:rebuild:failure', {
+          handle: normalizeHandle(deletedHandle ?? undefined) ?? 'unassigned',
+          error: describeError(err),
+        })
       })
     } else {
-      await deleteBlob(memoryPrimerPathForKey(deletedHandleKey)).catch(() => undefined)
+      await deleteBlob(memoryPrimerPathForKey(deletedHandleKey)).catch((err) =>
+        logDiagnostic('error', 'primer:delete:failure', {
+          handle: normalizeHandle(deletedHandle ?? undefined) ?? 'unassigned',
+          path: memoryPrimerPathForKey(deletedHandleKey),
+          error: describeError(err),
+        }),
+      )
       if (deletedHandleKey === 'unassigned') {
-        await deleteBlob(LEGACY_MEMORY_PRIMER_PATH).catch(() => undefined)
+        await deleteBlob(LEGACY_MEMORY_PRIMER_PATH).catch((err) =>
+          logDiagnostic('error', 'primer:delete:failure', {
+            handle: 'unassigned',
+            path: LEGACY_MEMORY_PRIMER_PATH,
+            error: describeError(err),
+          }),
+        )
       }
       resetPrimerState(deletedHandleKey)
     }
   } else if (mem.sessions.size === 0) {
-    await deleteBlob(LEGACY_MEMORY_PRIMER_PATH).catch(() => undefined)
-    await deleteBlob(memoryPrimerPathForKey('unassigned')).catch(() => undefined)
+    await deleteBlob(LEGACY_MEMORY_PRIMER_PATH).catch((err) =>
+      logDiagnostic('error', 'primer:delete:failure', {
+        handle: 'unassigned',
+        path: LEGACY_MEMORY_PRIMER_PATH,
+        error: describeError(err),
+      }),
+    )
+    await deleteBlob(memoryPrimerPathForKey('unassigned')).catch((err) =>
+      logDiagnostic('error', 'primer:delete:failure', {
+        handle: 'unassigned',
+        path: memoryPrimerPathForKey('unassigned'),
+        error: describeError(err),
+      }),
+    )
     resetPrimerState()
   }
 
@@ -1138,16 +1170,21 @@ export async function clearAllSessions(): Promise<{ ok: boolean }> {
       try {
         await deleteBlobsByPrefix(prefix)
       } catch (err) {
-        console.warn('Failed to delete blobs during clearAllSessions', {
+        logDiagnostic('error', 'session:clear-all:prefix-failure', {
           prefix,
-          err,
-          blobDetails: err && typeof err === 'object' ? (err as any).blobDetails : undefined,
+          error: describeError(err),
         })
       }
     }),
   )
 
-  await deleteBlob(LEGACY_MEMORY_PRIMER_PATH).catch(() => undefined)
+  await deleteBlob(LEGACY_MEMORY_PRIMER_PATH).catch((err) =>
+    logDiagnostic('error', 'primer:delete:failure', {
+      handle: 'unassigned',
+      path: LEGACY_MEMORY_PRIMER_PATH,
+      error: describeError(err),
+    }),
+  )
   resetPrimerState()
   hydrationState.attempted = true
   hydrationState.hydrated = true
@@ -1177,8 +1214,12 @@ export async function deleteSessionsByHandle(
     try {
       const result = await deleteSession(id)
       if (result.deleted) deleted += 1
-    } catch {
-      // ignore errors so one bad session doesn't block others
+    } catch (err) {
+      logDiagnostic('error', 'session:delete-by-handle:failure', {
+        handle: normalizedHandle ?? 'unassigned',
+        sessionId: id,
+        error: describeError(err),
+      })
     }
   }
 
