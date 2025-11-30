@@ -69,11 +69,19 @@ function ensureRequiredEnv() {
 
 async function postJson(url: string, label: string, body: Record<string, unknown>) {
   logDiagnostic('log', `${label}:request`, { url, bodyKeys: Object.keys(body) })
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(body),
-  })
+
+  let res: Response
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+  } catch (error) {
+    logDiagnostic('error', `${label}:network-error`, { url, error: serializeError(error) })
+    throw Object.assign(new Error(`${label} network failure`), { diagnosticStage: label })
+  }
+
   const rawText = await res.text()
   let parsed: any = null
   try {
@@ -85,8 +93,11 @@ async function postJson(url: string, label: string, body: Record<string, unknown
       raw: rawText.slice(0, 500),
       error: serializeError(error),
     })
-    throw new Error(`${label} did not return JSON`)
+    const parseError = new Error(`${label} did not return JSON`)
+    ;(parseError as any).diagnosticStage = label
+    throw parseError
   }
+
   if (!res.ok) {
     logDiagnostic('error', `${label}:response`, {
       url,
@@ -95,9 +106,18 @@ async function postJson(url: string, label: string, body: Record<string, unknown
       bodySnippet: rawText.slice(0, 500),
       parsed,
     })
-  } else {
-    logDiagnostic('log', `${label}:response`, { url, status: res.status, ok: res.ok })
+    const responseError = new Error(`${label} failed with status ${res.status}`)
+    ;(responseError as any).diagnosticStage = label
+    ;(responseError as any).diagnosticResponse = {
+      status: res.status,
+      ok: res.ok,
+      bodySnippet: rawText.slice(0, 500),
+      parsed,
+    }
+    throw responseError
   }
+
+  logDiagnostic('log', `${label}:response`, { url, status: res.status, ok: res.ok })
   return { res, data: parsed }
 }
 
