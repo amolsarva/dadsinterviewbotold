@@ -8,11 +8,9 @@ type TableColumn = {
   column_name: string
 }
 
-type InformationSchemaColumnsTable = {
-  Row: TableColumn
-  Insert: TableColumn
-  Update: Partial<TableColumn>
-  Relationships: []
+type InformationSchemaColumns = {
+  table_name: string
+  column_name: string
 }
 
 type TableShape = {
@@ -65,7 +63,7 @@ function validateEnvTableHint(table: string | undefined | null) {
   return normalized
 }
 
-function shapeFromColumns(rows: TableColumn[]): TableShape[] {
+function shapeFromColumns(rows: InformationSchemaColumns[]): TableShape[] {
   const grouped = rows.reduce<Record<string, Set<string>>>((acc, row) => {
     if (!acc[row.table_name]) {
       acc[row.table_name] = new Set()
@@ -74,7 +72,10 @@ function shapeFromColumns(rows: TableColumn[]): TableShape[] {
     return acc
   }, {})
 
-  return Object.entries(grouped).map(([table, columns]) => ({ table, columns: Array.from(columns).sort() }))
+  return Object.entries(grouped).map(([table, columns]) => ({
+    table,
+    columns: Array.from(columns).sort(),
+  }))
 }
 
 function isTurnsLike(shape: TableShape) {
@@ -84,10 +85,13 @@ function isTurnsLike(shape: TableShape) {
 async function listTableColumns() {
   const client = getSupabaseClient()
   const schemaClient = client.schema('information_schema')
+
   logMeta('log', 'introspect:tables:start', { schema: 'information_schema' })
+
+  // ✔ FIXED: proper typing + valid select syntax
   const { data, error, status } = await schemaClient
-    .from<InformationSchemaColumnsTable>('columns')
-    .select('table_name,column_name')
+    .from<InformationSchemaColumns>('columns')
+    .select('table_name, column_name')
     .eq('table_schema', 'public')
 
   if (error) {
@@ -98,12 +102,15 @@ async function listTableColumns() {
     logMeta('error', 'introspect:tables:empty', { status })
     throw new Error('Supabase metadata query returned no data for tables')
   }
+
   const shapes = shapeFromColumns(data)
+
   logMeta('log', 'introspect:tables:success', {
     status,
     tableCount: shapes.length,
     turnsLike: shapes.filter(isTurnsLike).map((shape) => shape.table),
   })
+
   return shapes
 }
 
@@ -153,6 +160,7 @@ function pickTurnsTable(shapes: TableShape[]): string {
     table: TURN_TABLE_FALLBACK,
     message: 'No turns-like table detected; falling back to configured conversation_turns.',
   })
+
   return TURN_TABLE_FALLBACK
 }
 
