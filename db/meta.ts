@@ -8,6 +8,13 @@ type TableColumn = {
   column_name: string
 }
 
+type InformationSchemaColumnsTable = {
+  Row: TableColumn
+  Insert: TableColumn
+  Update: Partial<TableColumn>
+  Relationships: []
+}
+
 type TableShape = {
   table: string
   columns: string[]
@@ -78,7 +85,7 @@ async function listTableColumns() {
   const client = getSupabaseClient()
   logMeta('log', 'introspect:tables:start')
   const { data, error, status } = await client
-    .from<TableColumn>('information_schema.columns')
+    .from<'information_schema.columns', InformationSchemaColumnsTable>('information_schema.columns')
     .select('table_name,column_name')
     .eq('table_schema', 'public')
 
