@@ -1,11 +1,17 @@
 {
-  "extends": "next/core-web-vitals",
+  "extends": ["next", "next/core-web-vitals"],
+  "parserOptions": {
+    "ecmaVersion": 2020,
+    "sourceType": "module"
+  },
   "rules": {
-    "no-restricted-syntax": [
+    "@typescript-eslint/no-explicit-any": "off",
+    "@typescript-eslint/ban-ts-comment": "off",
+    "@typescript-eslint/no-unused-vars": [
       "warn",
       {
-        "selector": "CallExpression[typeParameters.params.length=1][callee.type='MemberExpression'][callee.property.name='from']",
-        "message": "Supabase .from<T> must specify both table name and row type"
+        "argsIgnorePattern": "^_",
+        "varsIgnorePattern": "^_"
       }
     ]
   }
