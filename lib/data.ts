@@ -398,6 +398,7 @@ async function hydrateSessionsFromBlobs() {
   const timestamp = diagnosticTimestamp()
   const env = diagnosticEnvSummary()
   logDiagnostic('log', 'session:hydrate:start', { env })
+  hydrationDiagnostics.lastAttemptedAt = timestamp
 
   try {
     const { blobs } = await listBlobs({ prefix: 'sessions/', limit: 2000 }).catch((error) => {
@@ -480,6 +481,9 @@ async function hydrateSessionsFromBlobs() {
     }
 
     hydrationState.hydrated = loadedCount > 0
+    if (hydrationState.hydrated) {
+      hydrationDiagnostics.lastHydratedAt = timestamp
+    }
     logDiagnostic('log', 'session:hydrate:complete', {
       env,
       totalBlobs: blobs.length,
@@ -488,6 +492,13 @@ async function hydrateSessionsFromBlobs() {
       hydrated: hydrationState.hydrated,
     })
   } catch (err) {
+    const described = describeError(err)
+    hydrationDiagnostics.errors.push({
+      step: 'session:hydrate:failure',
+      message: described.message,
+      blobDetails: (described as any).blobDetails,
+      timestamp,
+    })
     logDiagnostic('error', 'session:hydrate:failure', { env, error: describeError(err) })
     throw err
   } finally {
@@ -499,6 +510,20 @@ async function hydrateSessionsFromBlobs() {
       errors: hydrationDiagnostics.errors,
     })
   }
+}
+
+export function getHydrationDiagnostics() {
+  const payload = {
+    attempted: hydrationState.attempted,
+    hydrated: hydrationState.hydrated,
+    sessionCount: mem.sessions.size,
+    lastAttemptedAt: hydrationDiagnostics.lastAttemptedAt,
+    lastHydratedAt: hydrationDiagnostics.lastHydratedAt,
+    errors: [...hydrationDiagnostics.errors],
+    env: diagnosticEnvSummary(),
+  }
+  logDiagnostic('log', 'session:hydrate:diagnostics', payload)
+  return payload
 }
 
 export async function ensureSessionMemoryHydrated() {
