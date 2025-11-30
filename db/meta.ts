@@ -1,3 +1,4 @@
+console.log("[META_TS_BUILD] version-2025-11-30_18:45:37");
 import { getSupabaseClient, logBlobDiagnostic, snapshotSupabaseEnv } from '@/utils/blob-env'
 
 const TURN_TABLE_FALLBACK = 'conversation_turns'
