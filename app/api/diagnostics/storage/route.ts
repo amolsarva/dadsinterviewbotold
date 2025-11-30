@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { NextRequest, NextResponse } from 'next/server'
 import { blobHealth, getBlobEnvironment, primeNetlifyBlobContextFromHeaders, putBlobFromBuffer, readBlob } from '@/lib/blob'
+import { getSupabaseBucket, getSupabaseClient, logBlobDiagnostic } from '@/utils/blob-env'
 import { jsonErrorResponse } from '@/lib/api-error'
 import type { BlobErrorReport } from '@/types/error-types'
 
@@ -93,6 +94,66 @@ function stringifyEnvError(envError: BlobErrorReport | null): string | null {
   )
 }
 
+function normalizeSupabaseError(error: unknown) {
+  const status = typeof (error as any)?.status === 'number' ? (error as any).status : null
+  const code = (error as any)?.code ?? null
+  const message =
+    typeof (error as any)?.message === 'string'
+      ? (error as any).message
+      : error instanceof Error
+      ? error.message
+      : 'Unknown Supabase error'
+  return { status, code, message }
+}
+
+async function verifySupabaseStorageAccess(): Promise<FlowStep> {
+  const started = Date.now()
+  try {
+    const client = getSupabaseClient()
+    const bucket = getSupabaseBucket()
+    logBlobDiagnostic('log', 'supabase-storage:preflight:start', { bucket })
+    const { data, error } = await client.storage.getBucket(bucket)
+    if (error) {
+      const normalized = normalizeSupabaseError(error)
+      logBlobDiagnostic('error', 'supabase-storage:preflight:failure', { bucket, ...normalized })
+      return {
+        id: 'supabase_preflight',
+        label: 'Verify Supabase storage access',
+        ok: false,
+        durationMs: Date.now() - started,
+        status: normalized.status ?? undefined,
+        error:
+          normalized.status === 401 || normalized.status === 403
+            ? 'Service role key lacks storage permissions for bucket.'
+            : normalized.message,
+        details: { bucket, status: normalized.status, code: normalized.code },
+      }
+    }
+
+    const note = data ? 'Bucket exists.' : 'Bucket metadata unavailable; proceed cautiously.'
+    logBlobDiagnostic('log', 'supabase-storage:preflight:success', { bucket, note })
+    return {
+      id: 'supabase_preflight',
+      label: 'Verify Supabase storage access',
+      ok: true,
+      durationMs: Date.now() - started,
+      message: note,
+    }
+  } catch (error) {
+    const normalized = normalizeSupabaseError(error)
+    logBlobDiagnostic('error', 'supabase-storage:preflight:exception', normalized)
+    return {
+      id: 'supabase_preflight',
+      label: 'Verify Supabase storage access',
+      ok: false,
+      durationMs: Date.now() - started,
+      error: normalized.message,
+      status: normalized.status ?? undefined,
+      details: normalized,
+    }
+  }
+}
+
 export async function GET(req: NextRequest) {
   logRoute('log', 'start', {
     hypotheses: HYPOTHESES,
@@ -137,8 +198,11 @@ export async function GET(req: NextRequest) {
       steps: flowSteps,
     }
 
+    const preflight = await verifySupabaseStorageAccess()
+    flowSteps.push(preflight)
+
     // Step 1: upload via Supabase storage
-    {
+    if (preflight.ok) {
       const started = Date.now()
       try {
         const upload = await putBlobFromBuffer(uploadPath, payloadBuffer, 'application/json', {
@@ -153,12 +217,14 @@ export async function GET(req: NextRequest) {
         })
       } catch (error) {
         const err = error as Error
+        const normalized = normalizeSupabaseError(err)
         flowSteps.push({
           id: 'supabase_write',
           label: 'Upload via Supabase storage',
           ok: false,
           durationMs: Date.now() - started,
-          error: err?.message,
+          error: normalized.message,
+          status: normalized.status ?? undefined,
         })
         logRouteError('supabase-write:error', err)
       }
@@ -190,12 +256,14 @@ export async function GET(req: NextRequest) {
         }
       } catch (error) {
         const err = error as Error
+        const normalized = normalizeSupabaseError(err)
         flowSteps.push({
           id: 'supabase_read',
           label: 'Read via Supabase storage',
           ok: false,
           durationMs: Date.now() - started,
-          error: err?.message,
+          error: normalized.message,
+          status: normalized.status ?? undefined,
         })
         logRouteError('supabase-read:error', err)
       }
