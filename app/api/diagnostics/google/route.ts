@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server"
 import { jsonErrorResponse } from "@/lib/api-error"
-import { resolveGoogleModel } from "@/lib/google"
-import OpenAI from "openai"
+import { resolveGoogleModel, getGoogleClient } from "@/lib/google"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -10,36 +9,34 @@ export const fetchCache = "force-no-store"
 export async function GET() {
   const timestamp = new Date().toISOString()
 
-  const googleModel = resolveGoogleModel(process.env.GOOGLE_MODEL ?? "")
-  const openaiKey = process.env.OPENAI_API_KEY ?? ""
+  const googleModel = resolveGoogleModel(process.env.GOOGLE_MODEL)
+  const apiKey = process.env.GOOGLE_API_KEY ?? ""
 
   const envSummary = {
+    googleApiKey: apiKey ? "set" : "missing",
     googleModel,
-    openaiKey: openaiKey ? "set" : "missing",
   }
 
   try {
-    if (!openaiKey) throw new Error("OPENAI_API_KEY must be set")
+    if (!apiKey) throw new Error("GOOGLE_API_KEY must be set")
 
-    const client = new OpenAI({ apiKey: openaiKey })
+    const client = getGoogleClient(googleModel)
 
-    const completion = await client.chat.completions.create({
-      model: googleModel || "gpt-4o-mini",
-      messages: [{ role: "user", content: "diagnostics-ping" }],
-      max_tokens: 5,
-      temperature: 0,
-    })
+    // simplest "ping" request
+    const result = await client.generateContent("diagnostics-ping")
 
     return NextResponse.json({
       ok: true,
       timestamp,
       envSummary,
       diagnostics: {
-        modelUsed: completion.model,
-        output: completion.choices?.[0]?.message?.content ?? null,
+        modelUsed: googleModel,
+        output:
+          result?.response?.text() ??
+          result?.candidates?.[0]?.content?.parts?.[0]?.text ??
+          null,
       },
     })
-
   } catch (err: any) {
     return jsonErrorResponse("google-diagnostics-error", {
       timestamp,
