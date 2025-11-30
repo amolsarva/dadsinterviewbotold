@@ -1,154 +1,125 @@
-import { createClient, type SupabaseClient } from "@supabase/supabase-js"
+// lib/supabase-health.ts
+// Supabase JS v2-compliant health checks.
 
-type EnvSummary = {
-  supabaseUrl: string
-  supabaseServiceRoleKey: string
-  supabaseStorageBucket: string
-}
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
-type LogLevel = "log" | "error"
+const supabaseUrl = process.env.SUPABASE_URL!;
+const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
+const bucketName = process.env.SUPABASE_STORAGE_BUCKET || 'public';
 
-type HealthResult = {
-  ok: boolean
-  message: string
-  detail?: unknown
-}
+const supabase: SupabaseClient = createClient(supabaseUrl, serviceRoleKey);
 
-function diagnosticsTimestamp() {
-  return new Date().toISOString()
-}
-
-function baseEnvSummary(): EnvSummary {
-  return {
-    supabaseUrl: process.env.SUPABASE_URL ? "set" : "missing",
-    supabaseServiceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY ? "set" : "missing",
-    supabaseStorageBucket: process.env.SUPABASE_STORAGE_BUCKET ? "set" : "missing",
+// Utility wrapper to avoid thrown errors
+async function safe<T>(name: string, fn: () => Promise<T>) {
+  try {
+    const result: any = await fn();
+    return {
+      ok: true,
+      name,
+      details: result?.details || null,
+    };
+  } catch (err: any) {
+    return {
+      ok: false,
+      name,
+      details: err?.message || String(err),
+      recovery: recoverMessage(name),
+    };
   }
 }
 
-function logDiagnostic(level: LogLevel, step: string, envSummary: EnvSummary, details?: Record<string, unknown>) {
-  const payload = {
-    step,
-    timestamp: diagnosticsTimestamp(),
-    envSummary,
-    ...(details ?? {}),
+function recoverMessage(name: string) {
+  switch (name) {
+    case 'validateServiceRoleKey':
+      return 'Check SUPABASE_SERVICE_ROLE_KEY in Vercel → Environment Variables. Test with a simple curl to your REST endpoint.';
+    case 'validateTurnsTableSchema':
+      return 'Open Supabase → Table Editor → confirm turns table exists and all required columns are present.';
+    case 'validateStorageBucketExists':
+      return `Open Supabase → Storage → confirm a bucket named "${bucketName}" exists.`;
+    case 'validateStorageWrite':
+      return `Confirm Storage RLS allows uploads or the service role key is correct.`;
+    default:
+      return 'Check your Supabase configuration and permissions.';
   }
-  const message = `[diagnostic] ${payload.timestamp} supabase-health:${step} ${JSON.stringify(payload)}`
-  return level === "error" ? console.error(message) : console.log(message)
 }
 
-function requireEnv(key: string, envSummary: EnvSummary): string {
-  const value = process.env[key]
-  if (!value || !value.trim()) {
-    const error = new Error(`${key} is required for Supabase health checks; diagnostics never assume defaults.`)
-    logDiagnostic("error", "missing-env", envSummary, { key })
-    throw error
-  }
-  return value
+// ---- CHECK 1: Service role key works ----
+async function validateServiceRoleKey() {
+  return safe('validateServiceRoleKey', async () => {
+    const { error } = await supabase
+      .from('pg_tables')
+      .select('tablename')
+      .limit(1);
+
+    if (error) throw new Error(`Service role key invalid: ${error.message}`);
+    return { details: 'Service role key succeeded.' };
+  });
 }
 
-function getSupabaseClient(envSummary: EnvSummary): SupabaseClient {
-  const supabaseUrl = requireEnv("SUPABASE_URL", envSummary)
-  const supabaseServiceRoleKey = requireEnv("SUPABASE_SERVICE_ROLE_KEY", envSummary)
-  const client = createClient(supabaseUrl, supabaseServiceRoleKey)
-  logDiagnostic("log", "client-initialized", envSummary, {
-    endpointPreview: `${supabaseUrl.slice(0, 24)}...`,
-  })
-  return client
+// ---- CHECK 2: Turns table exists ----
+async function validateTurnsTableSchema() {
+  return safe('validateTurnsTableSchema', async () => {
+    const table = process.env.SUPABASE_TURNS_TABLE || 'conversation_turns';
+
+    const { error } = await supabase
+      .from(table)
+      .select('*', { head: true })
+      .limit(1);
+
+    if (error)
+      throw new Error(
+        `Turns table "${table}" not accessible: ${error.message}`
+      );
+
+    return { details: `Turns table "${table}" exists.` };
+  });
 }
 
-async function validateServiceRoleAccess(client: SupabaseClient, envSummary: EnvSummary): Promise<HealthResult> {
-  logDiagnostic("log", "service-role:check", envSummary)
-  const { error } = await client.from("turns").select("id", { head: true, count: "exact" })
-  if (error) {
-    const message = `Service role validation failed: ${error.message}`
-    logDiagnostic("error", "service-role:failed", envSummary, { error: message })
-    return { ok: false, message }
-  }
-  logDiagnostic("log", "service-role:ok", envSummary)
-  return { ok: true, message: "Service role key can access turns table." }
+// ---- CHECK 3: Storage bucket exists ----
+async function validateStorageBucketExists() {
+  return safe('validateStorageBucketExists', async () => {
+    const { data, error } = await supabase.storage.from(bucketName).list('', {
+      limit: 1,
+    });
+
+    if (error)
+      throw new Error(
+        `Storage bucket "${bucketName}" not reachable: ${error.message}`
+      );
+
+    return { details: `Bucket "${bucketName}" exists (${data?.length} items).` };
+  });
 }
 
-async function validateTurnsTableSchema(client: SupabaseClient, envSummary: EnvSummary): Promise<HealthResult> {
-  logDiagnostic("log", "turns-schema:check", envSummary)
-  const { data, error } = await client
-    .from("turns")
-    .select("id, created_at", { count: "exact", head: true })
-  if (error) {
-    const message = `Turns table schema validation failed: ${error.message}`
-    logDiagnostic("error", "turns-schema:failed", envSummary, { error: message })
-    return { ok: false, message }
-  }
-  logDiagnostic("log", "turns-schema:ok", envSummary, { count: data?.length ?? 0 })
-  return { ok: true, message: "Turns table schema accessible." }
+// ---- CHECK 4: Storage write works ----
+async function validateStorageWrite() {
+  return safe('validateStorageWrite', async () => {
+    const testPath = `healthcheck-${Date.now()}.txt`;
+    const buffer = Buffer.from('healthcheck');
+
+    const { error: uploadError } = await supabase.storage
+      .from(bucketName)
+      .upload(testPath, buffer, { contentType: 'text/plain' });
+
+    if (uploadError)
+      throw new Error(`Write failed: ${uploadError.message}`);
+
+    // Cleanup
+    await supabase.storage.from(bucketName).remove([testPath]);
+
+    return { details: 'Write check passed.' };
+  });
 }
 
-async function checkStorageBucketAccess(client: SupabaseClient, envSummary: EnvSummary): Promise<HealthResult> {
-  const bucket = requireEnv("SUPABASE_STORAGE_BUCKET", envSummary)
-  logDiagnostic("log", "storage:check", envSummary, { bucket })
-  const { error } = await client.storage.from(bucket).list("", { limit: 1 })
-  if (error) {
-    const message = `Storage bucket access failed: ${error.message}`
-    logDiagnostic("error", "storage:failed", envSummary, { bucket, error: message })
-    return { ok: false, message }
-  }
-  logDiagnostic("log", "storage:ok", envSummary, { bucket })
-  return { ok: true, message: "Storage bucket accessible." }
-}
+// ---- MASTER CHECK ----
+export async function runSupabaseHealthCheck() {
+  const checks = await Promise.all([
+    validateServiceRoleKey(),
+    validateTurnsTableSchema(),
+    validateStorageBucketExists(),
+    validateStorageWrite(),
+  ]);
 
-async function checkStorageWritePermissions(client: SupabaseClient, envSummary: EnvSummary): Promise<HealthResult> {
-  const bucket = requireEnv("SUPABASE_STORAGE_BUCKET", envSummary)
-  const path = `diagnostics/supabase-health-${Date.now()}.txt`
-  logDiagnostic("log", "storage-write:check", envSummary, { bucket, path })
-  const { error } = await client.storage
-    .from(bucket)
-    .upload(path, new Blob(["diagnostics-write-probe"]), { upsert: true, contentType: "text/plain" })
-  if (error) {
-    const message = `Storage write permissions failed: ${error.message}`
-    logDiagnostic("error", "storage-write:failed", envSummary, { bucket, path, error: message })
-    return { ok: false, message }
-  }
-  logDiagnostic("log", "storage-write:ok", envSummary, { bucket, path })
-  return { ok: true, message: "Storage bucket accepts writes." }
-}
-
-async function runHealthCheckSuite(): Promise<HealthResult[]> {
-  const envSummary = baseEnvSummary()
-  logDiagnostic("log", "suite:start", envSummary, {
-    note: "Supabase diagnostics share production env; no diagnostics-only settings are used.",
-  })
-  const client = getSupabaseClient(envSummary)
-
-  const results: HealthResult[] = []
-  const checks = [
-    () => validateServiceRoleAccess(client, envSummary),
-    () => validateTurnsTableSchema(client, envSummary),
-    () => checkStorageBucketAccess(client, envSummary),
-    () => checkStorageWritePermissions(client, envSummary),
-  ]
-
-  for (const check of checks) {
-    try {
-      const result = await check()
-      results.push(result)
-      if (!result.ok) {
-        logDiagnostic("error", "suite:check-failed", envSummary, { message: result.message })
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Unknown Supabase health check failure"
-      logDiagnostic("error", "suite:exception", envSummary, { error: message })
-      results.push({ ok: false, message })
-    }
-  }
-
-  logDiagnostic("log", "suite:complete", envSummary, { results })
-  return results
-}
-
-export {
-  checkStorageBucketAccess,
-  checkStorageWritePermissions,
-  runHealthCheckSuite,
-  validateServiceRoleAccess,
-  validateTurnsTableSchema,
+  const ok = checks.every((c) => c.ok);
+  return { ok, timestamp: new Date().toISOString(), checks };
 }
