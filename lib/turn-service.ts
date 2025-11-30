@@ -1,7 +1,6 @@
 import { putBlobFromBuffer } from './blob'
 import { describeDatabaseMetaEnv, getCachedConversationTurnsTable, getConversationTurnsTable } from '@/db/meta'
 import { getSupabaseClient, logBlobDiagnostic } from '@/utils/blob-env'
-import { type TableDefinition } from '@/types/supabase'
 import { type ConversationTurnInsert, type ConversationTurnRow } from '@/types/turns'
 
 type DiagnosticLevel = 'log' | 'error'
@@ -147,8 +146,8 @@ export async function saveTurn(params: SaveTurnParams): Promise<SaveTurnResult> 
 
   logTurnDiagnostic('log', 'saveTurn:start', { table, payload })
   const { data, error, status } = await client
-    .from<string, TableDefinition<ConversationTurnRow>>(table)
-    .insert<ConversationTurnInsert>(payload)
+    .from<ConversationTurnRow>(table)
+    .insert(payload)
     .select('*')
     .single()
   if (error || !data) {
