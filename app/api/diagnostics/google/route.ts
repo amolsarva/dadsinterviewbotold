@@ -18,15 +18,17 @@ export async function GET() {
   }
 
   try {
-    if (!apiKey) throw new Error("GOOGLE_API_KEY must be set")
+    if (!apiKey) {
+      throw new Error("GOOGLE_API_KEY must be set")
+    }
 
     const client = getGoogleClient(googleModel)
 
+    // Minimal, stable Gemini request
     const result = await client.generateContent("diagnostics-ping")
 
-    const output =
-      result?.response?.text?.() ??
-      null
+    // New Google SDK result shape always uses result.response.text()
+    const output = result?.response?.text?.() ?? null
 
     return NextResponse.json({
       ok: true,
@@ -37,12 +39,11 @@ export async function GET() {
         output,
       },
     })
-
   } catch (err: any) {
-    return jsonErrorResponse("google-diagnostics-error", {
-      timestamp,
-      envSummary,
-      error: err?.message ?? String(err),
-    })
+    // jsonErrorResponse *requires* a string, not an object
+    return jsonErrorResponse(
+      "google-diagnostics-error",
+      `timestamp=${timestamp}; error=${err?.message ?? String(err)}`
+    )
   }
 }
