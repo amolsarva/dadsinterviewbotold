@@ -83,9 +83,10 @@ function isTurnsLike(shape: TableShape) {
 
 async function listTableColumns() {
   const client = getSupabaseClient()
-  logMeta('log', 'introspect:tables:start')
-  const { data, error, status } = await client
-    .from<'information_schema.columns', InformationSchemaColumnsTable>('information_schema.columns')
+  const schemaClient = client.schema('information_schema')
+  logMeta('log', 'introspect:tables:start', { schema: 'information_schema' })
+  const { data, error, status } = await schemaClient
+    .from<InformationSchemaColumnsTable>('columns')
     .select('table_name,column_name')
     .eq('table_schema', 'public')
 
