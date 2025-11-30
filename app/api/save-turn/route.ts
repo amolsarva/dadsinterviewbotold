@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
-import { primeNetlifyBlobContextFromHeaders, putBlobFromBuffer } from '@/lib/blob'
+import { primeNetlifyBlobContextFromHeaders } from '@/lib/blob'
 import { jsonErrorResponse } from '@/lib/api-error'
-import { logBlobDiagnostic } from '@/utils/blob-env'
+import { describeTurnEnv, saveTurn, uploadAudio, uploadTurnManifest } from '@/lib/turn-service'
 
 const ROUTE_NAME = 'app/api/save-turn'
 
@@ -23,15 +23,15 @@ function serializeError(error: unknown) {
   return { message: 'Unknown error', value: error }
 }
 
-function logRouteEvent(
-  level: 'log' | 'error',
-  event: string,
-  payload?: Record<string, unknown>,
-) {
-  logBlobDiagnostic(level, event, {
-    route: ROUTE_NAME,
-    ...(payload ?? {}),
-  })
+function logRouteEvent(level: 'log' | 'error', event: string, payload?: Record<string, unknown>) {
+  const timestamp = new Date().toISOString()
+  const entry = { route: ROUTE_NAME, env: describeTurnEnv(), ...(payload ?? {}) }
+  const message = `[diagnostic] ${timestamp} ${event} ${JSON.stringify(entry)}`
+  if (level === 'error') {
+    console.error(message)
+  } else {
+    console.log(message)
+  }
 }
 
 const schema = z.object({
@@ -78,28 +78,27 @@ export async function POST(req: NextRequest) {
       throw new Error('Invalid turn number')
     }
 
-    const buffer = Buffer.from(parsed.wav, 'base64')
-    const pad = String(turnNumber).padStart(4, '0')
     const mime = parsed.mime || 'audio/webm'
-    const extGuess = mime.split('/')[1]?.split(';')[0] || 'webm'
-    const audioPath = `sessions/${parsed.sessionId}/user-${pad}.${extGuess}`
-    const manifestPath = `sessions/${parsed.sessionId}/turn-${pad}.json`
+    const userAudio = await uploadAudio({
+      sessionId: parsed.sessionId,
+      turn: turnNumber,
+      role: 'user',
+      base64: parsed.wav,
+      mime,
+      label: 'user',
+    })
 
-    const userAudio = await putBlobFromBuffer(audioPath, buffer, mime, { access: 'public' })
     let assistantAudioUrl: string | null = null
     if (parsed.assistant_wav) {
-      const assistantBuffer = Buffer.from(parsed.assistant_wav, 'base64')
-      const assistantMime = parsed.assistant_mime || 'audio/mpeg'
-      const assistantExt = assistantMime.split('/')[1]?.split(';')[0] || 'mp3'
-      const assistantPath = `sessions/${parsed.sessionId}/assistant-${pad}.${assistantExt}`
-      logRouteEvent('log', 'save-turn:upload:assistant-audio', {
+      const assistantUpload = await uploadAudio({
         sessionId: parsed.sessionId,
-        path: assistantPath,
-        mime: assistantMime,
-        bytes: assistantBuffer.byteLength,
+        turn: turnNumber,
+        role: 'assistant',
+        base64: parsed.assistant_wav,
+        mime: parsed.assistant_mime || 'audio/mpeg',
+        label: 'assistant',
       })
-      const assistantBlob = await putBlobFromBuffer(assistantPath, assistantBuffer, assistantMime, { access: 'public' })
-      assistantAudioUrl = assistantBlob.downloadUrl || assistantBlob.url
+      assistantAudioUrl = assistantUpload.url
     }
 
     const manifestBody = {
@@ -115,32 +114,30 @@ export async function POST(req: NextRequest) {
       assistantAudioUrl,
       assistantAudioDurationMs: Number(parsed.assistant_duration_ms) || 0,
     }
-    logRouteEvent('log', 'save-turn:upload:user-audio', {
-      sessionId: parsed.sessionId,
-      path: audioPath,
-      mime,
-      bytes: buffer.byteLength,
-    })
-    const manifest = await putBlobFromBuffer(
-      manifestPath,
-      Buffer.from(JSON.stringify(manifestBody, null, 2), 'utf8'),
-      'application/json',
-      { access: 'public' }
-    )
 
-    logRouteEvent('log', 'save-turn:upload:manifest', {
+    const manifest = await uploadTurnManifest({ sessionId: parsed.sessionId, turn: turnNumber, manifest: manifestBody })
+
+    const turnRecord = await saveTurn({
       sessionId: parsed.sessionId,
-      path: manifestPath,
-      url: manifest.url || null,
+      turn: turnNumber,
+      transcript: parsed.transcript,
+      assistantReply: parsed.reply_text,
+      provider: parsed.provider,
+      manifestUrl: manifest.url,
+      userAudioUrl: userAudio.url,
+      assistantAudioUrl,
+      durationMs: Number(parsed.duration_ms) || 0,
+      assistantDurationMs: Number(parsed.assistant_duration_ms) || 0,
     })
 
-    const responsePayload = { ok: true, userAudioUrl: userAudio.url, manifestUrl: manifest.url }
+    const responsePayload = { ok: true, userAudioUrl: userAudio.url, manifestUrl: manifest.url, turn: turnRecord }
     logRouteEvent('log', 'save-turn:success', {
       sessionId: parsed.sessionId,
       turn: turnNumber,
       userAudioUrl: userAudio.url || null,
       manifestUrl: manifest.url || null,
       assistantAudioUrl,
+      turnId: turnRecord?.id || null,
     })
     return NextResponse.json(responsePayload)
   } catch (error) {
