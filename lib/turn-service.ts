@@ -155,8 +155,9 @@ export async function saveTurn(params: SaveTurnParams): Promise<SaveTurnResult> 
     logTurnDiagnostic('error', 'saveTurn:failure', { table, status, error: message })
     throw new Error(message)
   }
-  logTurnDiagnostic('log', 'saveTurn:success', { table, status, id: data.id })
-  return data as SaveTurnResult
+  const record = data as ConversationTurnRow
+  logTurnDiagnostic('log', 'saveTurn:success', { table, status, id: record.id })
+  return record as SaveTurnResult
 }
 
 export function describeTurnEnv() {
