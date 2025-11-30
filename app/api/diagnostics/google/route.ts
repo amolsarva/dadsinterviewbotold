@@ -2,14 +2,12 @@ import { NextResponse } from "next/server"
 import { jsonErrorResponse } from "@/lib/api-error"
 import { resolveGoogleModel } from "@/lib/google"
 
-// Next.js 14.2+ requires grouping static exports into a single config.
-export const config = {
-  runtime: "nodejs",
-  dynamic: "force-dynamic",
-  fetchCache: "force-no-store",
-}
+// Approved exports for Route Handlers
+export const runtime = "nodejs"
+export const dynamic = "force-dynamic"
+export const fetchCache = "force-no-store"
 
-// All route handlers must be async.
+// The only function allowed as the handler:
 export async function GET() {
   const timestamp = new Date().toISOString()
 
