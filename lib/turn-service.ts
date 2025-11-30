@@ -37,6 +37,13 @@ type SaveTurnParams = {
 
 type SaveTurnResult = ConversationTurnRow
 
+type ConversationTurnTable = {
+  Row: ConversationTurnRow
+  Insert: ConversationTurnInsert
+  Update: Partial<ConversationTurnRow>
+  Relationships: []
+}
+
 const diagnosticsTimestamp = () => new Date().toISOString()
 
 function envSummary() {
@@ -146,7 +153,7 @@ export async function saveTurn(params: SaveTurnParams): Promise<SaveTurnResult> 
 
   logTurnDiagnostic('log', 'saveTurn:start', { table, payload })
   const { data, error, status } = await client
-    .from<ConversationTurnRow>(table)
+    .from<string, ConversationTurnTable>(table)
     .insert(payload)
     .select('*')
     .single()
