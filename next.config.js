@@ -27,10 +27,10 @@ const diagnosticThrow = (message, extra = {}) => {
 const requiredSupabaseKeys = ['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY', 'SUPABASE_STORAGE_BUCKET']
 const missing = requiredSupabaseKeys.filter((key) => !env[key] || !String(env[key]).trim().length)
 if (missing.length) {
-  diagnosticThrow('Missing required Supabase configuration for Vercel deployment', { missing })
+  diagnosticLog('Supabase configuration incomplete; build will continue but storage routes will throw on use.', { missing })
+} else {
+  diagnosticLog('Vercel runtime detected; Supabase configuration present')
 }
-
-diagnosticLog('Vercel runtime detected; Supabase configuration present')
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
