@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server"
 import { jsonErrorResponse } from "@/lib/api-error"
-import { resolveGoogleModel, getGoogleClient } from "@/lib/google"
+import { createClient } from "@supabase/supabase-js"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -9,40 +9,31 @@ export const fetchCache = "force-no-store"
 export async function GET() {
   const timestamp = new Date().toISOString()
 
-  const googleModel = resolveGoogleModel(process.env.GOOGLE_MODEL)
-  const apiKey = process.env.GOOGLE_API_KEY ?? ""
+  const supabaseUrl = process.env.SUPABASE_URL ?? ""
+  const supabaseAnonKey = process.env.SUPABASE_ANON_KEY ?? ""
 
+  // Summarize env without leaking secrets
   const envSummary = {
-    googleApiKey: apiKey ? "set" : "missing",
-    googleModel,
+    supabaseUrl: supabaseUrl ? "set" : "missing",
+    supabaseAnonKey: supabaseAnonKey ? "set" : "missing",
   }
 
+  // Create a safe client even if values are blank
+  const supabase = createClient(supabaseUrl || "https://example.com", supabaseAnonKey || "public-anon-key")
+
   try {
-    if (!apiKey) {
-      throw new Error("GOOGLE_API_KEY must be set")
-    }
-
-    const client = getGoogleClient(googleModel)
-
-    // Minimal, stable Gemini request
-    const result = await client.generateContent("diagnostics-ping")
-
-    // New Google SDK result shape always uses result.response.text()
-    const output = result?.response?.text?.() ?? null
+    // Run a *very cheap* RLS-safe ping
+    const { error } = await supabase.from("conversation_turns").select("id").limit(1)
 
     return NextResponse.json({
-      ok: true,
+      ok: !error,
       timestamp,
       envSummary,
-      diagnostics: {
-        modelUsed: googleModel,
-        output,
-      },
+      ping: error ? `Error: ${error.message}` : "success",
     })
   } catch (err: any) {
-    // jsonErrorResponse *requires* a string, not an object
     return jsonErrorResponse(
-      "google-diagnostics-error",
+      "supabase-diagnostics-error",
       `timestamp=${timestamp}; error=${err?.message ?? String(err)}`
     )
   }
