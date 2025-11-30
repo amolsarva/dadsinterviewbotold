@@ -37,6 +37,5 @@ This project will fail fast when Supabase is misconfigured. Use this list to mak
 2. Turn table detection queries `information_schema.columns` using the service role. If metadata access is blocked, set `SUPABASE_TURNS_TABLE` explicitly.
 3. Audio + manifest uploads go to the configured bucket and require storage write permissions.
 4. Database insert uses the resolved turns table and requires insert privileges.
-5. Storage diagnostics (`/api/diagnostics/storage`) now performs a preflight bucket-permission check and will report HTTP 401/403 responses directly on the diagnostics page; resolve those before retrying uploads.
 
 If any step above is missing, the code will emit `[diagnostic]` logs with the failing step and error message. Fix the environment or Supabase project before retrying.
