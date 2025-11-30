@@ -146,8 +146,8 @@ export async function saveTurn(params: SaveTurnParams): Promise<SaveTurnResult> 
 
   logTurnDiagnostic('log', 'saveTurn:start', { table, payload })
   const { data, error, status } = await client
-    .from<ConversationTurnRow>(table)
-    .insert(payload)
+    .from(table)
+    .insert<ConversationTurnInsert>(payload)
     .select('*')
     .single()
   if (error || !data) {
@@ -155,8 +155,9 @@ export async function saveTurn(params: SaveTurnParams): Promise<SaveTurnResult> 
     logTurnDiagnostic('error', 'saveTurn:failure', { table, status, error: message })
     throw new Error(message)
   }
-  logTurnDiagnostic('log', 'saveTurn:success', { table, status, id: data.id })
-  return data as SaveTurnResult
+  const record = data as ConversationTurnRow
+  logTurnDiagnostic('log', 'saveTurn:success', { table, status, id: record.id })
+  return record as SaveTurnResult
 }
 
 export function describeTurnEnv() {

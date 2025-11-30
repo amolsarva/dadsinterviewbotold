@@ -735,6 +735,7 @@ export default function DiagnosticsPage() {
   const [envDump, setEnvDump] = useState<EnvDumpEntry[] | null>(null)
   const [envSummary, setEnvSummary] = useState<EnvDumpSummary | null>(null)
   const [envError, setEnvError] = useState<string | null>(null)
+  const [envStatusNote, setEnvStatusNote] = useState<string | null>(null)
   const [log, setLog] = useState<string>('Ready. Run diagnostics to gather fresh results.')
   const [results, setResults] = useState<Record<TestKey, TestResult>>(() => initialResults())
   const [remediationPlans, setRemediationPlans] = useState<Partial<Record<TestKey, RemediationStep[]>>>({})
@@ -755,15 +756,13 @@ export default function DiagnosticsPage() {
         const response = await fetch(url, { headers: { accept: 'application/json' } })
         const payload = await response.json()
 
-        if (!response.ok || (payload && typeof payload === 'object' && payload.ok === false)) {
-          const detail =
-            payload && typeof payload === 'object' && typeof (payload as any).error === 'string'
-              ? (payload as any).error
-              : `HTTP ${response.status}`
-          throw new Error(detail)
-        }
+        const payloadHasEnv = payload && typeof payload === 'object' && Array.isArray((payload as any).env)
+        const responseDetail =
+          payload && typeof payload === 'object' && typeof (payload as any).error === 'string'
+            ? (payload as any).error
+            : `HTTP ${response.status}`
 
-        if (!payload || typeof payload !== 'object' || !Array.isArray((payload as any).env)) {
+        if (!payloadHasEnv) {
           throw new Error('Malformed environment diagnostics payload')
         }
 
@@ -840,6 +839,11 @@ export default function DiagnosticsPage() {
           setEnvDump(sanitizedEntries)
           setEnvSummary(summary)
           setEnvError(null)
+          setEnvStatusNote(
+            !response.ok || (payload && typeof payload === 'object' && (payload as any).ok === false)
+              ? `Environment diagnostics responded with ${response.status}: ${responseDetail}`
+              : null,
+          )
         }
 
         const severityCounts = sanitizedEntries.reduce(
@@ -915,6 +919,14 @@ export default function DiagnosticsPage() {
           severityCounts,
           hypothesisEvaluations,
         })
+
+        if (!response.ok || (payload && typeof payload === 'object' && (payload as any).ok === false)) {
+          logClientDiagnostics('error', 'diagnostics:env-dump:fetch:non-ok', {
+            response: { status: response.status },
+            detail: responseDetail,
+            envCount: sanitizedEntries.length,
+          })
+        }
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Unknown error'
         logClientDiagnostics('error', 'diagnostics:env-dump:fetch:error', {
@@ -926,6 +938,7 @@ export default function DiagnosticsPage() {
           setEnvError(message)
           setEnvDump([])
           setEnvSummary(null)
+          setEnvStatusNote(null)
         }
       }
     }
@@ -1579,6 +1592,7 @@ export default function DiagnosticsPage() {
             <p className="status-note">No environment variables were returned by diagnostics.</p>
           ) : (
             <>
+              {envStatusNote && <p className="status-note env-error-note">{envStatusNote}</p>}
               {envSummary && (
                 <div className="diagnostics-env-summary">
                   <span>Total: {envSummary.total}</span>

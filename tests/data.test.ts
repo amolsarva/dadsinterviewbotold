@@ -9,6 +9,7 @@ const listBlobsMock = vi.fn(
   async (_options?: { prefix?: string; limit?: number; cursor?: string }): Promise<ListBlobResult> => ({
     blobs: [],
     hasMore: false,
+    nextCursor: null,
   }),
 )
 const deleteByPrefixMock = vi.fn(async (_prefix?: string): Promise<number> => 0)
@@ -29,7 +30,7 @@ vi.mock('../lib/email', () => ({
 
 afterEach(() => {
   global.fetch = originalFetch
-  listBlobsMock.mockImplementation(async () => ({ blobs: [], hasMore: false }))
+  listBlobsMock.mockImplementation(async () => ({ blobs: [], hasMore: false, nextCursor: null }))
 })
 
 describe('finalizeSession', () => {
@@ -47,6 +48,7 @@ describe('finalizeSession', () => {
     listBlobsMock.mockImplementation(async (_options?: { prefix?: string; limit?: number; cursor?: string }): Promise<ListBlobResult> => ({
       blobs: [],
       hasMore: false,
+      nextCursor: null,
     }))
     deleteByPrefixMock.mockReset()
     deleteBlobMock.mockReset()
@@ -304,6 +306,7 @@ describe('memory continuity across requests', () => {
     listBlobsMock.mockImplementation(async (_options?: { prefix?: string; limit?: number; cursor?: string }): Promise<ListBlobResult> => ({
       blobs: [],
       hasMore: false,
+      nextCursor: null,
     }))
     deleteByPrefixMock.mockReset()
     deleteBlobMock.mockReset()
@@ -371,11 +374,11 @@ describe('memory continuity across requests', () => {
 
     listBlobsMock.mockImplementation(
       async (options?: { prefix?: string; limit?: number; cursor?: string }): Promise<ListBlobResult> => {
-        if (!options) return { blobs: [], hasMore: false }
+        if (!options) return { blobs: [], hasMore: false, nextCursor: null }
         if (options.prefix === 'sessions/' || options.prefix === `sessions/${session.id}/`) {
-          return { blobs: [manifestEntry], hasMore: false }
+          return { blobs: [manifestEntry], hasMore: false, nextCursor: null }
         }
-        return { blobs: [], hasMore: false }
+        return { blobs: [], hasMore: false, nextCursor: null }
       },
     )
 
