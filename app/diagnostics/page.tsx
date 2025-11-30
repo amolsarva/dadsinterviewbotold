@@ -119,6 +119,23 @@ type EnvDumpSummary = {
   warnings: number
 }
 
+type HypothesisResult = {
+  id: string
+  category: 'openai' | 'supabase'
+  label: string
+  status: 'ok' | 'warn' | 'error' | 'info'
+  detail: string
+  suggestion?: string
+  evidence?: Record<string, unknown>
+}
+
+type HypothesisSummary = {
+  total: number
+  ok: number
+  warn: number
+  error: number
+}
+
 function sortEnvEntries(entries: EnvDumpEntry[]): EnvDumpEntry[] {
   const rank: Record<EnvDumpEntry['severity'], number> = { error: 0, warn: 1, ok: 2, info: 3 }
   return [...entries].sort((a, b) => {
@@ -746,6 +763,10 @@ export default function DiagnosticsPage() {
   const [envError, setEnvError] = useState<string | null>(null)
   const [envStatusNote, setEnvStatusNote] = useState<string | null>(null)
   const [envCopyStatus, setEnvCopyStatus] = useState<string | null>(null)
+  const [hypothesisResults, setHypothesisResults] = useState<HypothesisResult[] | null>(null)
+  const [hypothesisSummary, setHypothesisSummary] = useState<HypothesisSummary | null>(null)
+  const [hypothesisError, setHypothesisError] = useState<string | null>(null)
+  const [hypothesisStatus, setHypothesisStatus] = useState<'idle' | 'loading' | 'error'>('idle')
   const [log, setLog] = useState<string>('Ready. Run diagnostics to gather fresh results.')
   const [results, setResults] = useState<Record<TestKey, TestResult>>(() => initialResults())
   const [remediationPlans, setRemediationPlans] = useState<Partial<Record<TestKey, RemediationStep[]>>>({})
@@ -766,6 +787,20 @@ export default function DiagnosticsPage() {
     if (!envDump || envDump.length === 0) return 20
     return Math.max(envDump.length + 4, 20)
   }, [envDump])
+
+  const hypothesisIcon = useMemo(
+    () => ({ ok: '✅', warn: '⚠️', error: '❌', info: 'ℹ️' } as const),
+    [],
+  )
+
+  const sortedHypotheses = useMemo(() => {
+    if (!hypothesisResults) return []
+    return [...hypothesisResults].sort((a, b) => {
+      if (a.category !== b.category) return a.category.localeCompare(b.category)
+      if (a.status !== b.status) return a.status.localeCompare(b.status)
+      return a.label.localeCompare(b.label)
+    })
+  }, [hypothesisResults])
 
   const handleCopyEnv = useCallback(async () => {
     if (!envDump || envDump.length === 0) {
@@ -801,6 +836,82 @@ export default function DiagnosticsPage() {
       })
     }
   }, [envCopyText, envDump])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const url = '/api/diagnostics/hypotheses'
+    setHypothesisStatus('loading')
+
+    logClientDiagnostics('log', 'diagnostics:hypotheses:fetch:start', {
+      request: { url, method: 'GET', accept: 'application/json' },
+    })
+
+    async function loadHypotheses() {
+      try {
+        const response = await fetch(url, { headers: { accept: 'application/json' } })
+        const payload = await response.json()
+
+        const isValid =
+          payload && typeof payload === 'object' && Array.isArray((payload as any).results) && typeof (payload as any).summary === 'object'
+
+        if (!isValid) {
+          throw new Error('Malformed hypotheses diagnostics payload')
+        }
+
+        const normalizedResults: HypothesisResult[] = (payload as any).results.map((item: any) => {
+          const statusCandidates = ['ok', 'warn', 'error', 'info']
+          const status =
+            typeof item?.status === 'string' && statusCandidates.includes(item.status.toLowerCase())
+              ? (item.status.toLowerCase() as HypothesisResult['status'])
+              : 'info'
+          return {
+            id: typeof item?.id === 'string' && item.id.length ? item.id : crypto.randomUUID(),
+            category: item?.category === 'supabase' ? 'supabase' : 'openai',
+            label: typeof item?.label === 'string' ? item.label : 'Unlabeled hypothesis',
+            status,
+            detail: typeof item?.detail === 'string' ? item.detail : 'No detail provided.',
+            suggestion: typeof item?.suggestion === 'string' ? item.suggestion : undefined,
+            evidence: item?.evidence && typeof item.evidence === 'object' ? item.evidence : undefined,
+          }
+        })
+
+        const summaryRaw = (payload as any).summary
+        const normalizedSummary: HypothesisSummary = {
+          total:
+            typeof summaryRaw?.total === 'number' && Number.isFinite(summaryRaw.total)
+              ? summaryRaw.total
+              : normalizedResults.length,
+          ok: typeof summaryRaw?.ok === 'number' && Number.isFinite(summaryRaw.ok) ? summaryRaw.ok : 0,
+          warn: typeof summaryRaw?.warn === 'number' && Number.isFinite(summaryRaw.warn) ? summaryRaw.warn : 0,
+          error: typeof summaryRaw?.error === 'number' && Number.isFinite(summaryRaw.error) ? summaryRaw.error : 0,
+        }
+
+        setHypothesisResults(normalizedResults)
+        setHypothesisSummary(normalizedSummary)
+        setHypothesisError(response.ok ? null : (payload as any)?.message ?? `HTTP ${response.status}`)
+        setHypothesisStatus(response.ok ? 'idle' : 'error')
+
+        logClientDiagnostics('log', 'diagnostics:hypotheses:fetch:success', {
+          response: { status: response.status },
+          summary: normalizedSummary,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unknown error'
+        setHypothesisResults(null)
+        setHypothesisSummary(null)
+        setHypothesisError(message)
+        setHypothesisStatus('error')
+        logClientDiagnostics('error', 'diagnostics:hypotheses:fetch:error', {
+          request: { url },
+          error: error instanceof Error
+            ? { name: error.name, message: error.message, stack: error.stack }
+            : { message: 'Unknown error', value: error },
+        })
+      }
+    }
+
+    void loadHypotheses()
+  }, [])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -1637,6 +1748,48 @@ export default function DiagnosticsPage() {
             </div>
           ) : (
             <p className="status-note">No provider errors have been recorded yet.</p>
+          )}
+        </div>
+
+        <div className="diagnostics-hypotheses">
+          <h3>OpenAI + Supabase hypotheses checklist</h3>
+          <p className="status-note">
+            Live environment checks for the twenty OpenAI and Supabase hypotheses. Each item logs with a timestamped
+            diagnostic prefix to avoid silent failures.
+          </p>
+          {hypothesisStatus === 'loading' && <p className="status-note">Loading hypothesis checks…</p>}
+          {hypothesisError && <p className="status-note env-error-note">Failed to load: {hypothesisError}</p>}
+          {hypothesisSummary && (
+            <div className="diagnostics-env-summary">
+              <span>Total: {hypothesisSummary.total}</span>
+              <span>OK: {hypothesisSummary.ok}</span>
+              <span>Warnings: {hypothesisSummary.warn}</span>
+              <span>Errors: {hypothesisSummary.error}</span>
+            </div>
+          )}
+          {sortedHypotheses.length === 0 ? (
+            <p className="status-note">No hypothesis results yet.</p>
+          ) : (
+            <div className="hypothesis-grid">
+              {sortedHypotheses.map((item) => (
+                <div key={item.id} className={`diagnostic-card hypothesis-card hypothesis-${item.status}`}>
+                  <div className="diagnostic-card-head">
+                    <span className="diagnostic-icon" aria-hidden="true">
+                      {hypothesisIcon[item.status]}
+                    </span>
+                    <span className="diagnostic-label">{item.label}</span>
+                    <span className="hypothesis-category">{item.category}</span>
+                  </div>
+                  <div className="diagnostic-message hypothesis-detail">{item.detail}</div>
+                  {item.suggestion ? (
+                    <div className="hypothesis-suggestion">Suggested action: {item.suggestion}</div>
+                  ) : null}
+                  {item.evidence ? (
+                    <pre className="hypothesis-evidence">{JSON.stringify(item.evidence, null, 2)}</pre>
+                  ) : null}
+                </div>
+              ))}
+            </div>
           )}
         </div>
 

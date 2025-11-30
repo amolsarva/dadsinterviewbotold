@@ -752,6 +752,68 @@ textarea.diagnostics-log {
   letter-spacing: 0.06em;
 }
 
+.diagnostics-hypotheses {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.hypothesis-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+}
+
+.hypothesis-card {
+  border: 1px solid rgba(243, 203, 165, 0.8);
+  background: #fffdf9;
+}
+
+.hypothesis-card.hypothesis-ok {
+  border-color: #0b6a2b;
+}
+
+.hypothesis-card.hypothesis-warn {
+  border-color: #a55b00;
+}
+
+.hypothesis-card.hypothesis-error {
+  border-color: #a8180f;
+}
+
+.hypothesis-card.hypothesis-info {
+  border-color: #0f5280;
+}
+
+.hypothesis-category {
+  margin-left: auto;
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: rgba(115, 74, 43, 0.7);
+}
+
+.hypothesis-detail {
+  color: var(--muted);
+}
+
+.hypothesis-suggestion {
+  margin-top: 6px;
+  font-size: 13px;
+  color: #a55b00;
+}
+
+.hypothesis-evidence {
+  margin-top: 8px;
+  padding: 8px 10px;
+  background: rgba(255, 255, 255, 0.9);
+  border-radius: 12px;
+  border: 1px solid rgba(243, 203, 165, 0.6);
+  font-size: 12px;
+  color: var(--muted);
+  overflow: auto;
+}
+
 .env-severity.env-ok {
   color: #0b6a2b;
 }
