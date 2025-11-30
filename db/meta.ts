@@ -88,11 +88,11 @@ async function listTableColumns() {
 
   logMeta('log', 'introspect:tables:start', { schema: 'information_schema' })
 
-  // ✔ FIXED: proper typing + valid select syntax
+  // ✔ FIXEDx2: proper typing + valid select syntax
   const { data, error, status } = await schemaClient
-    .from<InformationSchemaColumns>('columns')
-    .select('table_name, column_name')
-    .eq('table_schema', 'public')
+  .from<InformationSchemaColumns>('columns')
+  .select('table_name, column_name')
+  .eq('table_schema', 'public')
 
   if (error) {
     logMeta('error', 'introspect:tables:error', { status, error: error.message })
