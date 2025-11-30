@@ -673,6 +673,25 @@ textarea.diagnostics-log {
   gap: 12px;
 }
 
+.env-copy-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.env-copy-textarea {
+  width: 100%;
+  border-radius: 14px;
+  border: 1px solid rgba(243, 203, 165, 0.9);
+  background: #fffaf5;
+  padding: 14px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 13px;
+  color: var(--muted);
+  resize: vertical;
+}
+
 .diagnostics-env-dump h3 {
   margin: 0;
   font-size: 18px;
@@ -793,6 +812,12 @@ textarea.diagnostics-log {
   display: flex;
   flex-direction: column;
   gap: 14px;
+}
+
+.diagnostics-debug-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 
 .diagnostics-foxes h3 {

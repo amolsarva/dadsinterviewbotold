@@ -1,7 +1,8 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { DeploymentMetadata } from '@/types/deployment'
+import { DebugPanel } from '../debug/debug-panel'
 
 type TestKey =
   | 'health'
@@ -116,6 +117,14 @@ type EnvDumpSummary = {
   total: number
   errors: number
   warnings: number
+}
+
+function sortEnvEntries(entries: EnvDumpEntry[]): EnvDumpEntry[] {
+  const rank: Record<EnvDumpEntry['severity'], number> = { error: 0, warn: 1, ok: 2, info: 3 }
+  return [...entries].sort((a, b) => {
+    if (rank[a.severity] !== rank[b.severity]) return rank[a.severity] - rank[b.severity]
+    return a.key.localeCompare(b.key)
+  })
 }
 
 const diagnosticsTimestamp = () => new Date().toISOString()
@@ -736,11 +745,62 @@ export default function DiagnosticsPage() {
   const [envSummary, setEnvSummary] = useState<EnvDumpSummary | null>(null)
   const [envError, setEnvError] = useState<string | null>(null)
   const [envStatusNote, setEnvStatusNote] = useState<string | null>(null)
+  const [envCopyStatus, setEnvCopyStatus] = useState<string | null>(null)
   const [log, setLog] = useState<string>('Ready. Run diagnostics to gather fresh results.')
   const [results, setResults] = useState<Record<TestKey, TestResult>>(() => initialResults())
   const [remediationPlans, setRemediationPlans] = useState<Partial<Record<TestKey, RemediationStep[]>>>({})
   const [isRunning, setIsRunning] = useState(false)
   const [foxes, setFoxes] = useState<FoxRecord[]>([])
+
+  const envCopyText = useMemo(() => {
+    if (!envDump || envDump.length === 0) return ''
+    return envDump
+      .map(
+        (entry) =>
+          `${entry.key},${entry.severity.toUpperCase()},${entry.value ?? '(undefined)'},${entry.message ?? '—'}`,
+      )
+      .join('\n')
+  }, [envDump])
+
+  const envCopyRows = useMemo(() => {
+    if (!envDump || envDump.length === 0) return 20
+    return Math.max(envDump.length + 4, 20)
+  }, [envDump])
+
+  const handleCopyEnv = useCallback(async () => {
+    if (!envDump || envDump.length === 0) {
+      setEnvCopyStatus('No environment variables to copy yet.')
+      logClientDiagnostics('error', 'diagnostics:env-dump:copy:empty', {
+        envSummary: { total: envDump?.length || 0 },
+      })
+      return
+    }
+    if (typeof navigator === 'undefined' || !navigator.clipboard) {
+      const fallbackMessage = 'Clipboard access is unavailable in this browser context.'
+      setEnvCopyStatus(fallbackMessage)
+      logClientDiagnostics('error', 'diagnostics:env-dump:copy:unsupported', {
+        envSummary: { total: envDump.length },
+        detail: fallbackMessage,
+      })
+      return
+    }
+    try {
+      await navigator.clipboard.writeText(envCopyText)
+      setEnvCopyStatus('Copied all environment variables to the clipboard.')
+      logClientDiagnostics('log', 'diagnostics:env-dump:copy:success', {
+        envSummary: { total: envDump.length },
+      })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown copy error'
+      setEnvCopyStatus(`Copy failed: ${message}`)
+      logClientDiagnostics('error', 'diagnostics:env-dump:copy:error', {
+        envSummary: { total: envDump.length },
+        error: error instanceof Error
+          ? { name: error.name, message: error.message, stack: error.stack }
+          : { message: 'Unknown error', value: error },
+      })
+    }
+  }, [envCopyText, envDump])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -789,7 +849,7 @@ export default function DiagnosticsPage() {
               : String(item.message)
           return { key, value, severity, message }
         })
-        sanitizedEntries.sort((a, b) => a.key.localeCompare(b.key))
+        const sortedEntries = sortEnvEntries(sanitizedEntries)
 
         const summarySource = (payload as any).summary
         const summary: EnvDumpSummary | null =
@@ -836,7 +896,7 @@ export default function DiagnosticsPage() {
               }
 
         if (!cancelled) {
-          setEnvDump(sanitizedEntries)
+          setEnvDump(sortedEntries)
           setEnvSummary(summary)
           setEnvError(null)
           setEnvStatusNote(
@@ -1580,61 +1640,6 @@ export default function DiagnosticsPage() {
           )}
         </div>
 
-        <div className="diagnostics-env-dump">
-          <h3>Environment variables snapshot</h3>
-          {envError ? (
-            <p className="status-note env-error-note">
-              Failed to load environment variables: {envError}
-            </p>
-          ) : envDump === null ? (
-            <p className="status-note">Loading environment variables…</p>
-          ) : envDump.length === 0 ? (
-            <p className="status-note">No environment variables were returned by diagnostics.</p>
-          ) : (
-            <>
-              {envStatusNote && <p className="status-note env-error-note">{envStatusNote}</p>}
-              {envSummary && (
-                <div className="diagnostics-env-summary">
-                  <span>Total: {envSummary.total}</span>
-                  <span>Errors: {envSummary.errors}</span>
-                  <span>Warnings: {envSummary.warnings}</span>
-                </div>
-              )}
-              <div className="env-table-wrapper" role="region" aria-live="polite">
-                <table className="env-table">
-                  <thead>
-                    <tr>
-                      <th scope="col">Key</th>
-                      <th scope="col">Status</th>
-                      <th scope="col">Value</th>
-                      <th scope="col">Notes</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {envDump.map((entry, index) => {
-                      const rowKey = entry.key && entry.key.length ? entry.key : `env-${index}`
-                      return (
-                        <tr key={rowKey}>
-                          <td>{entry.key || '(unnamed)'}</td>
-                          <td>
-                            <span className={`env-severity env-${entry.severity}`}>
-                              {entry.severity.toUpperCase()}
-                            </span>
-                          </td>
-                          <td>
-                            <code>{entry.value ?? '(undefined)'}</code>
-                          </td>
-                          <td>{entry.message ?? '—'}</td>
-                        </tr>
-                      )
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            </>
-          )}
-        </div>
-
         <div className="diagnostics-tests">
           {TEST_ORDER.map((key) => {
             const result = results[key]
@@ -1694,6 +1699,83 @@ export default function DiagnosticsPage() {
                 </li>
               ))}
             </ul>
+          )}
+        </div>
+
+        <div className="diagnostics-debug-panel">
+          <h3>Debug utilities</h3>
+          <p className="status-note">
+            These controls mirror the dedicated Debug page so you can validate blob storage and cleanup flows without
+            leaving the diagnostics workspace.
+          </p>
+          <DebugPanel />
+        </div>
+
+        <div className="diagnostics-env-dump">
+          <h3>Environment variables snapshot</h3>
+          {envError ? (
+            <p className="status-note env-error-note">
+              Failed to load environment variables: {envError}
+            </p>
+          ) : envDump === null ? (
+            <p className="status-note">Loading environment variables…</p>
+          ) : envDump.length === 0 ? (
+            <p className="status-note">No environment variables were returned by diagnostics.</p>
+          ) : (
+            <>
+              {envStatusNote && <p className="status-note env-error-note">{envStatusNote}</p>}
+              {envSummary && (
+                <div className="diagnostics-env-summary">
+                  <span>Total: {envSummary.total}</span>
+                  <span>Errors: {envSummary.errors}</span>
+                  <span>Warnings: {envSummary.warnings}</span>
+                </div>
+              )}
+              <div className="env-copy-controls">
+                <button type="button" className="btn-secondary" onClick={handleCopyEnv}>
+                  Copy all env vars
+                </button>
+                {envCopyStatus ? <span className="status-note">{envCopyStatus}</span> : null}
+              </div>
+              <textarea
+                className="env-copy-textarea"
+                readOnly
+                value={envCopyText}
+                rows={envCopyRows}
+                style={{ height: `${envCopyRows}em` }}
+              />
+              <div className="env-table-wrapper" role="region" aria-live="polite">
+                <table className="env-table">
+                  <thead>
+                    <tr>
+                      <th scope="col">Key</th>
+                      <th scope="col">Status</th>
+                      <th scope="col">Value</th>
+                      <th scope="col">Notes</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {envDump.map((entry, index) => {
+                      const rowKey = entry.key && entry.key.length ? entry.key : `env-${index}`
+                      return (
+                        <tr key={rowKey}>
+                          <td>{entry.key || '(unnamed)'}</td>
+                          <td>
+                            <span className={`env-severity env-${entry.severity}`}>
+                              {entry.severity.toUpperCase()}
+                            </span>
+                          </td>
+                          <td>
+                            <code>{entry.value ?? '(undefined)'}</code>
+                          </td>
+                          <td>{entry.message ?? '—'}</td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </>
           )}
         </div>
       </div>
