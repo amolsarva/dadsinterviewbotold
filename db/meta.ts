@@ -1,12 +1,8 @@
 import { getSupabaseClient, logBlobDiagnostic, snapshotSupabaseEnv } from '@/utils/blob-env'
+import { type TableColumn, type TableDefinition } from '@/types/supabase'
 
 const TURN_TABLE_FALLBACK = 'conversation_turns'
 const REQUIRED_COLUMNS = ['session_id', 'turn', 'transcript'] as const
-
-type TableColumn = {
-  table_name: string
-  column_name: string
-}
 
 type TableShape = {
   table: string
@@ -76,9 +72,10 @@ function isTurnsLike(shape: TableShape) {
 
 async function listTableColumns() {
   const client = getSupabaseClient()
+  const schemaTable = 'information_schema.columns' as const
   logMeta('log', 'introspect:tables:start')
   const { data, error, status } = await client
-    .from('information_schema.columns')
+    .from<typeof schemaTable, TableDefinition<TableColumn>>(schemaTable)
     .select('table_name,column_name')
     .eq('table_schema', 'public')
 
@@ -90,7 +87,7 @@ async function listTableColumns() {
     logMeta('error', 'introspect:tables:empty', { status })
     throw new Error('Supabase metadata query returned no data for tables')
   }
-  const shapes = shapeFromColumns(data as TableColumn[])
+  const shapes = shapeFromColumns(data)
   logMeta('log', 'introspect:tables:success', {
     status,
     tableCount: shapes.length,

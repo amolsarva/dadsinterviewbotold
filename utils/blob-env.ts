@@ -1,5 +1,7 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 
+type SupabaseAnyClient = SupabaseClient<any, any, any>
+
 const REQUIRED_KEYS = ['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY', 'SUPABASE_STORAGE_BUCKET'] as const
 
 export type SupabaseEnvSnapshot = Record<(typeof REQUIRED_KEYS)[number], string | undefined>
@@ -69,13 +71,13 @@ export function assertSupabaseEnv(options: BlobEnvAssertionOptions = {}) {
   }
 }
 
-let cachedClient: SupabaseClient | null = null
+let cachedClient: SupabaseAnyClient | null = null
 
-export function getSupabaseClient(): SupabaseClient {
+export function getSupabaseClient(): SupabaseAnyClient {
   if (cachedClient) return cachedClient
   const snapshot = snapshotSupabaseEnv()
   assertSupabaseEnv({ snapshot, note: 'Initializing Supabase client for storage operations' })
-  cachedClient = createClient(snapshot.SUPABASE_URL!, snapshot.SUPABASE_SERVICE_ROLE_KEY!, {
+  cachedClient = createClient<any>(snapshot.SUPABASE_URL!, snapshot.SUPABASE_SERVICE_ROLE_KEY!, {
     auth: { autoRefreshToken: false, persistSession: false },
   })
   logBlobDiagnostic('log', 'supabase-client-initialized', {
