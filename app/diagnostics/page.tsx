@@ -3,7 +3,15 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { DeploymentMetadata } from '@/types/deployment'
 
-type TestKey = 'health' | 'storage' | 'google' | 'openai' | 'smoke' | 'e2e' | 'email'
+type TestKey =
+  | 'health'
+  | 'storage'
+  | 'google'
+  | 'openai'
+  | 'smoke'
+  | 'turn'
+  | 'e2e'
+  | 'email'
 type TestResult = { status: 'idle' | 'pending' | 'ok' | 'error'; message?: string }
 type FoxRecord = {
   id: string
@@ -165,11 +173,12 @@ const TEST_CONFIG: Record<TestKey, { label: string; path: string; method: 'GET' 
   google: { label: 'Google AI API check', path: '/api/diagnostics/google', method: 'GET' },
   openai: { label: 'OpenAI API check', path: '/api/diagnostics/openai', method: 'GET' },
   smoke: { label: 'Smoke test', path: '/api/diagnostics/smoke', method: 'POST' },
+  turn: { label: 'Turn sequence drill', path: '/api/diagnostics/turn-sequence', method: 'POST' },
   e2e: { label: 'End-to-end test', path: '/api/diagnostics/e2e', method: 'POST' },
   email: { label: 'Email test', path: '/api/diagnostics/email', method: 'POST' },
 }
 
-const TEST_ORDER: TestKey[] = ['health', 'storage', 'google', 'openai', 'smoke', 'e2e', 'email']
+const TEST_ORDER: TestKey[] = ['health', 'storage', 'google', 'openai', 'smoke', 'turn', 'e2e', 'email']
 
 function initialResults(): Record<TestKey, TestResult> {
   return {
@@ -178,6 +187,7 @@ function initialResults(): Record<TestKey, TestResult> {
     google: { status: 'idle' },
     openai: { status: 'idle' },
     smoke: { status: 'idle' },
+    turn: { status: 'idle' },
     e2e: { status: 'idle' },
     email: { status: 'idle' },
   }
@@ -593,6 +603,25 @@ function formatSummary(key: TestKey, data: any): string {
       : data.error || 'E2E test failed'
   }
 
+  if (key === 'turn') {
+    const steps = Array.isArray(data?.steps) ? data.steps : []
+    const stepSummary = steps.length
+      ? steps
+          .map((step: any) => {
+            const flag = step.ok ? '✅' : '❌'
+            const statusLabel = typeof step.status === 'number' ? ` HTTP ${step.status}` : ''
+            return `${flag} ${step.id || 'step'}${statusLabel}`
+          })
+          .join(' · ')
+      : null
+    const turnIdLabel = data?.turnId || data?.turn?.id
+    if (data.ok && stepSummary) {
+      return `${stepSummary}${turnIdLabel ? ` · turn ${turnIdLabel}` : ''}`
+    }
+    if (stepSummary) return stepSummary
+    return data.error || 'Turn sequence failed'
+  }
+
   if (data.error) return `Error: ${data.error}`
   return data.ok ? 'Passed' : 'Failed'
 }
@@ -684,6 +713,7 @@ function buildDefaultRemediation(
     google: 'Verify GOOGLE_API_KEY/GOOGLE_MODEL and confirm access is enabled.',
     email: 'Check SENDGRID_API_KEY or RESEND_API_KEY and DEFAULT_NOTIFY_EMAIL.',
     smoke: 'Inspect server logs; ensure dependent services are reachable.',
+    turn: 'Confirm /api/save-turn prerequisites (Supabase URL, service role key, turns table, and blob config).',
     e2e: 'Run storage and provider checks; fix failures above first.',
     health: 'Review storage/db details in the health payload.',
     storage: 'Inspect Supabase URL, service role key, bucket name, and RLS policies.',
