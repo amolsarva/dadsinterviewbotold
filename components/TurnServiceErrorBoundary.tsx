@@ -1,29 +1,36 @@
-import React, { Component } from 'react';
+import React, { Component, ReactNode } from 'react';
 
-class TurnServiceErrorBoundary extends Component {
-    constructor(props) {
-        super(props);
-        this.state = { hasError: false };
+type TurnServiceErrorBoundaryProps = {
+  children?: ReactNode;
+};
+
+type TurnServiceErrorBoundaryState = {
+  hasError: boolean;
+};
+
+class TurnServiceErrorBoundary extends Component<
+  TurnServiceErrorBoundaryProps,
+  TurnServiceErrorBoundaryState
+> {
+  constructor(props: TurnServiceErrorBoundaryProps) {
+    super(props);
+    this.state = { hasError: false };
+  }
+
+  static getDerivedStateFromError(_error: unknown) {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: unknown, info: unknown) {
+    console.error('Error caught in TurnServiceErrorBoundary:', error, info);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return <h1>Something went wrong with the turn service.</h1>;
     }
-
-    static getDerivedStateFromError(error) {
-        // Update state so the next render shows the fallback UI
-        return { hasError: true }; 
-    }
-
-    componentDidCatch(error, info) {
-        // You can also log the error to an error reporting service
-        console.error('Error caught in TurnServiceErrorBoundary:', error, info);
-    }
-
-    render() {
-        if (this.state.hasError) {
-            // You can render any custom fallback UI
-            return <h1>Something went wrong with the turn service.</h1>;
-        }
-
-        return this.props.children; 
-    }
+    return this.props.children;
+  }
 }
 
 export default TurnServiceErrorBoundary;
