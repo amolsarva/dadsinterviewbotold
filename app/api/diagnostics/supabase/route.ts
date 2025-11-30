@@ -30,19 +30,38 @@ export async function GET() {
       );
     }
 
+    logDiagnostic("log", "rpc-success", envSummary, { result: data })
+
     return NextResponse.json({
       status: "success",
+      ok: true,
+      timestamp,
+      envSummary,
       message: "Supabase is healthy!",
       data,
-    });
-  } catch (err: any) {
+    })
+  } catch (error: any) {
+    logDiagnostic("error", "failed", envSummary, {
+      error: error instanceof Error ? error.message : String(error),
+    })
+
     return NextResponse.json(
       {
         status: "error",
-        message: "Supabase diagnostics failed",
-        details: err?.message ?? String(err),
+        ok: false,
+        timestamp,
+        envSummary,
+        message:
+          error instanceof Error
+            ? error.message
+            : "Supabase diagnostics failed; verify required environment variables and RPC availability.",
+        recoveryInstructions: [
+          "Set SUPABASE_URL and SUPABASE_ANON_KEY to the same values used in production.",
+          "Ensure the health_check RPC exists and is accessible to the anon role.",
+          "Retry once credentials are in place; the endpoint exits early on missing configuration.",
+        ],
       },
-      { status: 500 }
-    );
+      { status: 500 },
+    )
   }
 }
