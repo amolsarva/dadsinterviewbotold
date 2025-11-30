@@ -19,8 +19,7 @@ function diagnosticsTimestamp() {
 function envSummary() {
   return {
     googleApiKey: process.env.GOOGLE_API_KEY ? 'set' : 'missing',
-    diagnosticsModel: process.env.GOOGLE_DIAGNOSTICS_MODEL ?? null,
-    fallbackModel: process.env.GOOGLE_MODEL ?? null,
+    model: process.env.GOOGLE_MODEL ?? null,
   }
 }
 
@@ -67,13 +66,11 @@ export async function GET() {
 
   let model: string
   try {
-    model = resolveGoogleModel(process.env.GOOGLE_DIAGNOSTICS_MODEL, process.env.GOOGLE_MODEL)
-    log('log', 'model:resolved', { model })
+    model = resolveGoogleModel(process.env.GOOGLE_MODEL)
+    log('log', 'model:resolved', { model, note: 'AmolsLegacyCLEANUP: diagnostics mirror production GOOGLE_MODEL only.' })
   } catch (error) {
     const message =
-      error instanceof Error
-        ? error.message
-        : 'Unable to resolve Google diagnostics model. Configure GOOGLE_DIAGNOSTICS_MODEL or GOOGLE_MODEL.'
+      error instanceof Error ? error.message : 'Unable to resolve Google diagnostics model. Configure GOOGLE_MODEL explicitly.'
     log('error', 'model:resolution-failed', { message })
     return NextResponse.json({ ok: false, error: 'missing_google_model', message }, { status: 500 })
   }
