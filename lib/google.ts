@@ -28,27 +28,18 @@ function normalizeModelCandidate(candidate: string | null | undefined): string |
   return withoutPrefix
 }
 
-export function resolveGoogleModel(
-  ...candidates: Array<string | null | undefined>
-): string {
-  for (const candidate of candidates) {
-    const normalized = normalizeModelCandidate(candidate)
-    if (normalized) {
-      return normalized
-    }
+export function resolveGoogleModel(primaryModel: string | null | undefined): string {
+  const normalized = normalizeModelCandidate(primaryModel)
+  if (normalized) {
+    return normalized
   }
+
   const timestamp = new Date().toISOString()
-  const hypotheses = [
-    'GOOGLE_MODEL may be unset for the current deployment.',
-    'GOOGLE_DIAGNOSTICS_MODEL may not be defined for diagnostics flows.',
-    'The provided model values may be blank or whitespace after trimming.',
-  ]
+  const hypotheses = ['GOOGLE_MODEL may be unset or blank for the current deployment.']
   const payload = {
     hypotheses,
-    candidates: candidates.map((candidate) => (typeof candidate === 'string' ? candidate : null)),
+    candidates: [typeof primaryModel === 'string' ? primaryModel : null],
   }
   console.error(`[diagnostic] ${timestamp} google:resolve-model:missing ${JSON.stringify(payload)}`)
-  throw new Error(
-    'No valid Google model has been configured. Set GOOGLE_MODEL (or GOOGLE_DIAGNOSTICS_MODEL for diagnostics) to a supported Gemini model name.',
-  )
+  throw new Error('No valid Google model has been configured. Set GOOGLE_MODEL to a supported Gemini model name.')
 }

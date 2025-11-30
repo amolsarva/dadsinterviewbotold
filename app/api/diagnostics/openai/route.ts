@@ -8,7 +8,7 @@ type DiagnosticLevel = 'log' | 'error'
 
 const hypotheses = [
   'OPENAI_API_KEY may be unset for diagnostics.',
-  'OPENAI_DIAGNOSTICS_MODEL could be missing or blank.',
+  'OPENAI_MODEL could be missing or blank.',
   'The OpenAI API might return an error payload or empty choices.',
 ]
 
@@ -19,7 +19,7 @@ function diagnosticsTimestamp() {
 function envSummary() {
   return {
     openaiApiKey: process.env.OPENAI_API_KEY ? 'set' : 'missing',
-    diagnosticsModel: process.env.OPENAI_DIAGNOSTICS_MODEL ?? null,
+    model: process.env.OPENAI_MODEL ?? 'default:gpt-4o-mini',
   }
 }
 
@@ -62,12 +62,11 @@ export async function GET() {
     return NextResponse.json({ ok: false, error: 'missing_openai_api_key', message }, { status: 500 })
   }
 
-  const diagnosticsModel = process.env.OPENAI_DIAGNOSTICS_MODEL
-    ? process.env.OPENAI_DIAGNOSTICS_MODEL.trim()
-    : ''
+  const diagnosticsModel = process.env.OPENAI_MODEL ? process.env.OPENAI_MODEL.trim() : ''
   if (!diagnosticsModel) {
-    const message = 'OPENAI_DIAGNOSTICS_MODEL must be configured for diagnostics checks.'
-    log('error', 'request:missing-model', { message })
+    const message =
+      'OPENAI_MODEL must be configured so diagnostics and production share a single source of truth. Defaults are refused.'
+    log('error', 'request:missing-model', { message, note: 'AmolsLegacyCLEANUP: removed diagnostics-only model env.' })
     return NextResponse.json({ ok: false, error: 'missing_openai_model', message }, { status: 500 })
   }
 

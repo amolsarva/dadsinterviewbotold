@@ -45,7 +45,7 @@ const formatTimestamp = () => new Date().toISOString()
 const envSummary = () => ({
   totalKeys: Object.keys(process.env).length,
   nodeEnv: process.env.NODE_ENV ?? null,
-  platform: process.env.VERCEL ? 'vercel' : process.env.NETLIFY === 'true' ? 'netlify' : 'custom',
+  platform: process.env.VERCEL ? 'vercel' : 'custom',
   vercelEnv: process.env.VERCEL_ENV ?? null,
 })
 
@@ -231,14 +231,6 @@ const GROUPS: EnvGroup[] = [
           return pass('Custom model configured.')
         },
       },
-      {
-        key: 'GOOGLE_DIAGNOSTICS_MODEL',
-        label: 'Diagnostics Gemini model',
-        validate: (value) =>
-          value
-            ? pass('Diagnostics model override detected.')
-            : warn('Missing; diagnostics will reuse GOOGLE_MODEL.'),
-      },
     ],
   },
   {
@@ -254,14 +246,6 @@ const GROUPS: EnvGroup[] = [
               ? pass('Token length looks valid.')
               : fail('Token present but shorter than expected; verify key.', false)
             : fail('OPENAI_API_KEY missing; OpenAI text and TTS calls will fail.'),
-      },
-      {
-        key: 'OPENAI_DIAGNOSTICS_MODEL',
-        label: 'Diagnostics model override',
-        validate: (value) =>
-          value
-            ? pass('Custom diagnostics model set.')
-            : warn('Missing diagnostics model override; verify defaults match deployment expectations.'),
       },
     ],
   },
@@ -334,37 +318,6 @@ const GROUPS: EnvGroup[] = [
     cat: 'Deployment metadata + commits',
     checks: [
       {
-        key: 'NETLIFY',
-        label: 'Netlify platform flag',
-        validate: (value) => (value ? pass(`NETLIFY=${value}`) : warn('NETLIFY missing; platform detection may be off.')),
-      },
-      {
-        key: 'NETLIFY_DEV',
-        label: 'Netlify dev flag',
-        validate: (value) => (value ? pass(`NETLIFY_DEV=${value}`) : warn('NETLIFY_DEV missing; local dev context unknown.')),
-      },
-      {
-        key: 'NETLIFY_BLOBS_SITE_ID',
-        label: 'Netlify blobs site id',
-        validate: (value) =>
-          value ? pass('Netlify blobs site id detected.') : warn('NETLIFY_BLOBS_SITE_ID missing; blob API may reject writes.'),
-      },
-      {
-        key: 'NETLIFY_BLOBS_SITE_NAME',
-        label: 'Netlify blobs site name',
-        validate: (value) => (value ? pass('Blobs site name detected.') : warn('NETLIFY_BLOBS_SITE_NAME missing.')),
-      },
-      {
-        key: 'NETLIFY_CONTEXT',
-        label: 'Netlify context',
-        validate: (value) => (value ? pass(`Context ${value}.`) : warn('NETLIFY_CONTEXT missing; deploy summary incomplete.')),
-      },
-      {
-        key: 'NETLIFY_DEPLOY_ID',
-        label: 'Netlify deploy id',
-        validate: (value) => (value ? pass(`Netlify deploy id ${value}.`) : warn('NETLIFY_DEPLOY_ID missing; cannot trace deploy.')),
-      },
-      {
         key: 'MY_DEPLOY_ID',
         label: 'Custom deploy id',
         validate: (value) => (value ? pass(`Custom deploy id ${value}.`) : warn('MY_DEPLOY_ID missing; custom deploy tracking disabled.')),
@@ -396,41 +349,9 @@ const GROUPS: EnvGroup[] = [
           value ? pass(`Client deploy id ${value}.`) : warn('NEXT_PUBLIC_DEPLOY_ID missing; client deploy summary incomplete.'),
       },
       {
-        key: 'NETLIFY_SITE_ID',
-        label: 'Netlify site id',
-        validate: (value) => (value ? pass(`Netlify site id ${value}.`) : warn('NETLIFY_SITE_ID missing; site linkage unclear.')),
-      },
-      {
         key: 'SITE_NAME',
         label: 'Generic site name',
         validate: (value) => (value ? pass(`Site name ${value}.`) : warn('SITE_NAME missing; site metadata incomplete.')),
-      },
-      {
-        key: 'NETLIFY_BLOBS_STORE',
-        label: 'Netlify blobs store',
-        validate: (value) => (value ? pass(`Blobs store ${value}.`) : warn('NETLIFY_BLOBS_STORE missing; blob diagnostics may fail.')),
-      },
-      {
-        key: 'NETLIFY_BLOBS_TOKEN',
-        label: 'Netlify blobs token',
-        validate: (value) => (value ? pass('Blobs token detected.') : warn('NETLIFY_BLOBS_TOKEN missing; blob auth may fail.')),
-      },
-      {
-        key: 'NETLIFY_BLOBS_API_URL',
-        label: 'Netlify blobs API URL',
-        validate: (value) =>
-          value ? pass('Blobs API URL configured.') : warn('NETLIFY_BLOBS_API_URL missing; blob diagnostics may pick defaults.'),
-      },
-      {
-        key: 'NETLIFY_BLOBS_EDGE_URL',
-        label: 'Netlify blobs edge URL',
-        validate: (value) => (value ? pass('Blobs edge URL configured.') : warn('NETLIFY_BLOBS_EDGE_URL missing.')),
-      },
-      {
-        key: 'NETLIFY_BLOBS_PUBLIC_BASE_URL',
-        label: 'Netlify blobs public URL',
-        validate: (value) =>
-          value ? pass('Public blobs base URL configured.') : warn('NETLIFY_BLOBS_PUBLIC_BASE_URL missing; public asset links may fail.'),
       },
       {
         key: 'NEXT_PUBLIC_GITHUB_REPOSITORY',
@@ -538,17 +459,9 @@ const GROUPS: EnvGroup[] = [
         validate: (value) => (value ? pass(`SITE_ID=${value}`) : warn('SITE_ID missing; some logs cannot correlate to site.')),
       },
       {
-        key: 'NETLIFY_SITE_NAME',
-        label: 'Netlify site name',
-        validate: (value) =>
-          value
-            ? pass(`Site name ${value}.`)
-            : warn('NETLIFY_SITE_NAME missing; admin console links may not render.'),
-      },
-      {
         key: 'CONTEXT',
-        label: 'Netlify build context',
-        validate: (value) => (value ? pass(`CONTEXT=${value}`) : warn('CONTEXT missing; Netlify build context unknown.')),
+        label: 'Build context',
+        validate: (value) => (value ? pass(`CONTEXT=${value}`) : warn('CONTEXT missing; build context unknown.')),
       },
       {
         key: 'DEPLOY_URL',
@@ -706,12 +619,9 @@ export async function GET(request: Request) {
         .filter((outcome): outcome is CheckOutcome => !!outcome && outcome.severity !== 'ok')
 
     const blobIssues = collectIssues([
-      'NETLIFY_BLOBS_SITE_ID',
-      'NETLIFY_BLOBS_STORE',
-      'NETLIFY_BLOBS_TOKEN',
-      'NETLIFY_BLOBS_API_URL',
-      'NETLIFY_BLOBS_EDGE_URL',
-      'NETLIFY_BLOBS_PUBLIC_BASE_URL',
+      'SUPABASE_URL',
+      'SUPABASE_SERVICE_ROLE_KEY',
+      'SUPABASE_STORAGE_BUCKET',
     ])
     const emailIssues = collectIssues([
       'DEFAULT_NOTIFY_EMAIL',
