@@ -57,6 +57,69 @@ const DIAGNOSTIC_PROVIDER_ERROR_STORAGE_KEY = 'diagnostics:lastProviderError'
 const KNOWN_HANDLE_LIMIT = 8
 const SERVER_HANDLE_LIMIT = 12
 
+const formatClientPersistenceContext = () => ({
+  env: {
+    vercelEnv: process.env.NEXT_PUBLIC_VERCEL_ENV ?? null,
+    supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL ? 'set' : 'missing',
+    supabaseBucket: process.env.NEXT_PUBLIC_SUPABASE_STORAGE_BUCKET ?? null,
+    supabaseTurnsTable: process.env.NEXT_PUBLIC_SUPABASE_TURNS_TABLE ?? null,
+  },
+  location: typeof window !== 'undefined' ? window.location.href : 'server-render',
+  userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : 'server-render',
+})
+
+const logClientDiagnostic = (
+  level: 'log' | 'error',
+  event: string,
+  payload?: Record<string, unknown>,
+) => {
+  const timestamp = new Date().toISOString()
+  const entry = { ...formatClientPersistenceContext(), ...(payload ?? {}) }
+  const message = `[diagnostic] ${timestamp} client:${event} ${JSON.stringify(entry)}`
+  if (level === 'error') {
+    console.error(message)
+  } else {
+    console.log(message)
+  }
+}
+
+async function extractResponseError(response: Response) {
+  let body: any = null
+  let message: string | null = null
+  try {
+    body = await response.clone().json()
+    message =
+      body?.message ||
+      body?.error ||
+      body?.diagnostic?.error?.message ||
+      body?.diagnostic?.error?.cause?.message ||
+      null
+  } catch (jsonError) {
+    logClientDiagnostic('error', 'persist:response-json-parse-failed', {
+      error: jsonError instanceof Error ? jsonError.message : String(jsonError),
+    })
+    try {
+      const text = await response.text()
+      body = text
+      if (typeof text === 'string' && text.trim().length) {
+        message = truncateForLog(text, 240)
+      }
+    } catch (textError) {
+      logClientDiagnostic('error', 'persist:response-text-parse-failed', {
+        error: textError instanceof Error ? textError.message : String(textError),
+      })
+    }
+  }
+
+  return {
+    status: response.status,
+    statusText: response.statusText,
+    url: response.url || 'unknown',
+    message: message || null,
+    body,
+  }
+}
+
 const formatSessionEnvSummary = () => ({
   NEXT_PUBLIC_DEFAULT_NOTIFY_EMAIL: process.env.NEXT_PUBLIC_DEFAULT_NOTIFY_EMAIL ?? null,
   DEFAULT_NOTIFY_EMAIL: process.env.DEFAULT_NOTIFY_EMAIL ?? null,
@@ -1592,64 +1655,115 @@ export function Home({ userHandle }: { userHandle?: string }) {
         return
       }
 
-      const persistPromises: Promise<any>[] = []
-      persistPromises.push(
-        fetch('/api/save-turn', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({
-            sessionId,
-            turn: turn + 1,
-            wav: b64,
-            mime: 'audio/webm',
-            duration_ms: recDuration,
-            reply_text: reply,
-            transcript,
-            provider: 'google',
-            assistant_wav: assistantPlayback.base64 || undefined,
-            assistant_mime: assistantPlayback.mime || undefined,
-            assistant_duration_ms: assistantPlayback.durationMs || 0,
+      const persistenceTasks = [
+        {
+          id: 'save-turn',
+          service: 'Supabase turn storage',
+          action: 'POST /api/save-turn',
+          intent: 'store audio, turn manifest, and database row',
+          request: fetch('/api/save-turn', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              sessionId,
+              turn: turnNumber,
+              wav: b64,
+              mime: 'audio/webm',
+              duration_ms: recDuration,
+              reply_text: reply,
+              transcript,
+              provider: 'google',
+              assistant_wav: assistantPlayback.base64 || undefined,
+              assistant_mime: assistantPlayback.mime || undefined,
+              assistant_duration_ms: assistantPlayback.durationMs || 0,
+            }),
           }),
-        }),
-      )
-      persistPromises.push(
-        fetch(`/api/session/${sessionId}/turn`, {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ role: 'user', text: transcript || '' }),
-        }),
-      )
-      persistPromises.push(
-        fetch(`/api/session/${sessionId}/turn`, {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ role: 'assistant', text: reply || '' }),
-        }),
-      )
+        },
+        {
+          id: 'session-user',
+          service: 'Session timeline',
+          action: `POST /api/session/${sessionId}/turn`,
+          intent: 'append user transcript to session record',
+          request: fetch(`/api/session/${sessionId}/turn`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ role: 'user', text: transcript || '' }),
+          }),
+        },
+        {
+          id: 'session-assistant',
+          service: 'Session timeline',
+          action: `POST /api/session/${sessionId}/turn`,
+          intent: 'append assistant reply to session record',
+          request: fetch(`/api/session/${sessionId}/turn`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ role: 'assistant', text: reply || '' }),
+          }),
+        },
+      ]
+
+      logClientDiagnostic('log', 'persist:dispatch', {
+        sessionId,
+        turn: turnNumber,
+        tasks: persistenceTasks.map((task) => ({
+          id: task.id,
+          service: task.service,
+          action: task.action,
+          intent: task.intent,
+        })),
+      })
+
       let persistResults: PromiseSettledResult<any>[] = []
       try {
-        persistResults = await Promise.allSettled(persistPromises)
+        persistResults = await Promise.allSettled(persistenceTasks.map((task) => task.request))
       } catch (error) {
         const reason = error instanceof Error ? error.message : 'Unknown persistence error'
+        const detail = truncateForLog(reason, 160)
+        logClientDiagnostic('error', 'persist:aggregate-rejection', { sessionId, turn: turnNumber, reason: detail })
         recordFatal('Turn failed — unable to save the conversation.', [
-          `Reason: ${truncateForLog(reason, 160)}`,
+          `Reason: ${detail}`,
           'Resolve diagnostics before continuing.',
         ])
         return
       }
+
       const persistFailures: string[] = []
-      for (const result of persistResults) {
+      for (let i = 0; i < persistResults.length; i += 1) {
+        const meta = persistenceTasks[i]
+        const result = persistResults[i]
         if (result.status === 'rejected') {
           const reason = result.reason instanceof Error ? result.reason.message : String(result.reason ?? 'unknown error')
-          persistFailures.push(`Rejected: ${truncateForLog(reason, 160)}`)
+          const detail = truncateForLog(reason, 160)
+          logClientDiagnostic('error', 'persist:rejected', { sessionId, turn: turnNumber, task: meta, reason: detail })
+          persistFailures.push(`${meta.service}: request rejected while attempting to ${meta.intent} — ${detail}`)
           continue
         }
-        const response = result.value
-        if (response && typeof response.ok === 'boolean' && !response.ok) {
-          const statusLabel = typeof response.status === 'number' ? `HTTP ${response.status}` : 'non-OK response'
-          persistFailures.push(`${statusLabel} while saving turn`)
+
+        const response = result.value as Response
+        if (!response || typeof response.ok !== 'boolean') {
+          logClientDiagnostic('error', 'persist:unknown-response-shape', { sessionId, turn: turnNumber, task: meta })
+          persistFailures.push(`${meta.service}: unknown response while attempting to ${meta.intent}`)
+          continue
         }
+
+        if (!response.ok) {
+          const detail = await extractResponseError(response)
+          logClientDiagnostic('error', 'persist:http-error', { sessionId, turn: turnNumber, task: meta, detail })
+          const statusLabel = Number.isFinite(detail.status) ? `HTTP ${detail.status}` : 'HTTP status unavailable'
+          const message = detail.message ? `Message: ${truncateForLog(detail.message, 200)}` : 'No error message returned.'
+          persistFailures.push(
+            `${meta.service}: ${statusLabel} during ${meta.intent} (${meta.action}). ${message}`,
+          )
+          if (detail.message?.includes('SUPABASE_TURNS_TABLE')) {
+            persistFailures.push('Supabase turn table is not configured. Set SUPABASE_TURNS_TABLE to the table that stores turns.')
+          }
+          continue
+        }
+
+        logClientDiagnostic('log', 'persist:success', { sessionId, turn: turnNumber, task: meta })
       }
+
       if (persistFailures.length) {
         recordFatal('Turn failed — saving data was unsuccessful.', [
           ...persistFailures,

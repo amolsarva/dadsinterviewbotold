@@ -72,14 +72,38 @@ function logTurnDiagnostic(level: DiagnosticLevel, step: string, payload?: Recor
 }
 
 function resolveTurnsTable() {
-  const table = typeof process.env.SUPABASE_TURNS_TABLE === 'string'
+  const serverTable = typeof process.env.SUPABASE_TURNS_TABLE === 'string'
     ? process.env.SUPABASE_TURNS_TABLE.trim()
     : ''
-  if (!table) {
-    const message = 'SUPABASE_TURNS_TABLE is required to save turns; no default is assumed.'
-    logTurnDiagnostic('error', 'saveTurn:table:missing', { message })
-    throw new Error(message)
+  const publicTable = typeof process.env.NEXT_PUBLIC_SUPABASE_TURNS_TABLE === 'string'
+    ? process.env.NEXT_PUBLIC_SUPABASE_TURNS_TABLE.trim()
+    : ''
+
+  if (serverTable) {
+    logTurnDiagnostic('log', 'saveTurn:table:resolved', {
+      source: 'SUPABASE_TURNS_TABLE',
+      table: serverTable,
+    })
+    return serverTable
   }
+
+  if (publicTable) {
+    logTurnDiagnostic('log', 'saveTurn:table:resolved', {
+      source: 'NEXT_PUBLIC_SUPABASE_TURNS_TABLE',
+      table: publicTable,
+      note: 'Using public env var for server-side Supabase writes; ensure parity across environments.',
+    })
+    return publicTable
+  }
+
+  const message = 'SUPABASE_TURNS_TABLE is required to save turns; no default is assumed.'
+  logTurnDiagnostic('error', 'saveTurn:table:missing', { message })
+  throw new Error(message)
+}
+
+export function assertTurnsTableConfigured() {
+  const table = resolveTurnsTable()
+  logTurnDiagnostic('log', 'saveTurn:table:asserted', { table })
   return table
 }
 
