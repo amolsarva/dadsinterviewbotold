@@ -1,14 +1,12 @@
 // lib/google.ts
-// Minimal, dependency-free helper for normalizing GOOGLE_MODEL env strings.
-// We keep this because various routes still import resolveGoogleModel,
-// but the function no longer depends on @google/generative-ai.
+import { GoogleGenerativeAI } from "@google/generative-ai"
 
-export const DEFAULT_GOOGLE_MODEL = 'gemini-2.5-flash-lite'
+export const DEFAULT_GOOGLE_MODEL = "gemini-2.5-flash-lite"
 
-// Strip legacy prefixes like `/models/...`
+// Strip legacy "/models/*" prefixes
 const LEGACY_PREFIX = /\/models\//i
 
-// Match old Gemini model name formats that should be rewritten
+// Handle old model names used in early Gemini versions
 const LEGACY_MODEL_PATTERNS = [
   /gemini-1\./i,
   /gemini-1s/i,
@@ -18,33 +16,46 @@ const LEGACY_MODEL_PATTERNS = [
 ]
 
 function normalizeModelCandidate(candidate: string | null | undefined): string | null {
-  if (!candidate || typeof candidate !== 'string') return null
+  if (!candidate || typeof candidate !== "string") return null
 
   const trimmed = candidate.trim()
   if (!trimmed) return null
 
-  const withoutPrefix = trimmed.replace(LEGACY_PREFIX, '')
+  const withoutPrefix = trimmed.replace(LEGACY_PREFIX, "")
   const lower = withoutPrefix.toLowerCase()
 
   if (!withoutPrefix) return null
 
-  // Special case: old "gemini-2.5-flash" → newer "gemini-2.5-flash-lite"
-  if (lower === 'gemini-2.5-flash') {
-    return 'gemini-2.5-flash-lite'
+  // Old -> new mapping
+  if (lower === "gemini-2.5-flash") {
+    return "gemini-2.5-flash-lite"
   }
 
-  // If any legacy pattern matches, force the new default
-  if (LEGACY_MODEL_PATTERNS.some(pattern => pattern.test(lower))) {
+  if (LEGACY_MODEL_PATTERNS.some((pattern) => pattern.test(lower))) {
     return DEFAULT_GOOGLE_MODEL
   }
 
   return withoutPrefix
 }
 
+/**
+ * Resolve the Google model name based on GOOGLE_MODEL or fall back to default.
+ */
 export function resolveGoogleModel(primaryModel: string | null | undefined): string {
   const normalized = normalizeModelCandidate(primaryModel)
-  if (normalized) return normalized
+  return normalized || DEFAULT_GOOGLE_MODEL
+}
 
-  // If GOOGLE_MODEL is blank or missing, fall back to a safe default
-  return DEFAULT_GOOGLE_MODEL
+/**
+ * Factory function creating a Gemini client bound to the correct model.
+ * Used by ask-audio and intro routes.
+ */
+export function getGoogleClient(model: string) {
+  const apiKey = process.env.GOOGLE_API_KEY
+  if (!apiKey) {
+    throw new Error("GOOGLE_API_KEY must be set for Google provider")
+  }
+
+  const genAI = new GoogleGenerativeAI(apiKey)
+  return genAI.getGenerativeModel({ model })
 }
