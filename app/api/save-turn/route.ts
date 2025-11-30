@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import { primeNetlifyBlobContextFromHeaders } from '@/lib/blob'
 import { jsonErrorResponse } from '@/lib/api-error'
-import { describeTurnEnv, saveTurn, uploadAudio, uploadTurnManifest } from '@/lib/turn-service'
+import { assertTurnsTableConfigured, describeTurnEnv, saveTurn, uploadAudio, uploadTurnManifest } from '@/lib/turn-service'
 
 const ROUTE_NAME = 'app/api/save-turn'
 
@@ -52,6 +52,18 @@ export async function POST(req: NextRequest) {
   logRouteEvent('log', 'save-turn:request:start', {
     url: req.url,
   })
+  try {
+    const table = assertTurnsTableConfigured()
+    logRouteEvent('log', 'save-turn:turn-table:ready', { turnsTable: table })
+  } catch (error) {
+    logRouteEvent('error', 'save-turn:turn-table:missing', {
+      url: req.url,
+      error: serializeError(error),
+    })
+    return jsonErrorResponse(error, 'Supabase turn table unavailable', 400, {
+      reason: 'missing_turns_table',
+    })
+  }
   try {
     primeNetlifyBlobContextFromHeaders(req.headers)
   } catch (error) {
