@@ -4,7 +4,8 @@ import { primeNetlifyBlobContextFromHeaders } from '@/lib/blob'
 import { listFoxes } from '@/lib/foxes'
 import { jsonErrorResponse } from '@/lib/api-error'
 import { resolveDefaultNotifyEmailServer } from '@/lib/default-notify-email.server'
-import { saveTurn, uploadAudio, uploadTurnManifest } from '@/lib/turn-service'
+import { describeTurnEnv, saveTurn, uploadAudio, uploadTurnManifest } from '@/lib/turn-service'
+import { describeDatabaseMetaEnv, getCachedConversationTurnsTable } from '@/db/meta'
 
 export const runtime = 'nodejs'
 
@@ -17,17 +18,65 @@ type Stage =
   | 'save_turn_record'
   | 'finalize_session'
 
-function wrapStage<T>(stage: Stage, task: () => Promise<T>): Promise<T> {
-  return task().catch(err => {
-    const error = err instanceof Error ? err : new Error(String(err))
-    ;(error as any).diagnosticStage = stage
+function diagnosticsTimestamp() {
+  return new Date().toISOString()
+}
+
+function envSnapshot() {
+  return { turn: resolveTurnEnv(), db: describeDatabaseMetaEnv() }
+}
+
+function logDiagnostic(level: 'log' | 'error', event: string, payload?: Record<string, unknown>) {
+  const entry = { event, env: envSnapshot(), ...(payload ?? {}) }
+  const message = `[diagnostic] ${diagnosticsTimestamp()} diagnostics:e2e ${JSON.stringify(entry)}`
+  if (level === 'error') {
+    console.error(message)
+  } else {
+    console.log(message)
+  }
+}
+
+function resolveTurnEnv() {
+  try {
+    return describeTurnEnv()
+  } catch (error) {
+    const serialized = error instanceof Error ? { name: error.name, message: error.message } : { message: 'unknown error' }
+    logDiagnostic('error', 'env:resolve:error', { error: serialized })
     throw error
-  })
+  }
+}
+
+function wrapStage<T>(stage: Stage, task: () => Promise<T>): Promise<T> {
+  logDiagnostic('log', `${stage}:start`, { stage })
+  return task()
+    .then((result) => {
+      logDiagnostic('log', `${stage}:success`, { stage })
+      return result
+    })
+    .catch((err) => {
+      const error = err instanceof Error ? err : new Error(String(err))
+      logDiagnostic('error', `${stage}:error`, {
+        stage,
+        error: { name: error.name, message: error.message, stack: error.stack },
+      })
+      ;(error as any).diagnosticStage = stage
+      throw error
+    })
 }
 
 export async function POST(request: Request) {
   try {
-    primeNetlifyBlobContextFromHeaders(request.headers)
+    logDiagnostic('log', 'request:start', { url: request.url })
+    try {
+      primeNetlifyBlobContextFromHeaders(request.headers)
+      logDiagnostic('log', 'prime-context:success', { url: request.url })
+    } catch (error) {
+      logDiagnostic('error', 'prime-context:failed', {
+        url: request.url,
+        error: error instanceof Error ? { name: error.name, message: error.message, stack: error.stack } : { error },
+      })
+      throw error
+    }
     const session = await wrapStage('create_session', () =>
       createSession({ email_to: resolveDefaultNotifyEmailServer() })
     )
@@ -86,7 +135,9 @@ export async function POST(request: Request) {
       finalizeSession(session.id, { clientDurationMs: 1500 })
     )
 
-    return NextResponse.json({ ok: true, sessionId: session.id, result, turnId: turnRecord.id, foxes: listFoxes() })
+    const responsePayload = { ok: true, sessionId: session.id, result, turnId: turnRecord.id, foxes: listFoxes() }
+    logDiagnostic('log', 'request:success', { sessionId: session.id, turnId: turnRecord.id })
+    return NextResponse.json(responsePayload)
   } catch (error) {
     const blobDetails =
       error && typeof error === 'object'
@@ -107,12 +158,19 @@ export async function POST(request: Request) {
       error && typeof error === 'object' && typeof (error as any).message === 'string' && (error as any).message.trim().length
         ? (error as any).message
         : 'e2e_failed'
+    logDiagnostic('error', 'request:error', {
+      stage,
+      error:
+        error instanceof Error
+          ? { name: error.name, message: error.message, stack: error.stack }
+          : { message: 'unknown error', value: error },
+    })
     return jsonErrorResponse(error, fallbackMessage, 500, {
       stage,
       details: blobDetails,
       cause: causeMessage,
       foxes: listFoxes(),
-      turnsTable: process.env.SUPABASE_TURNS_TABLE ?? null,
+      turnsTable: getCachedConversationTurnsTable(),
     })
   }
 }
