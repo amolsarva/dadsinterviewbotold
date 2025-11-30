@@ -133,6 +133,75 @@ const GROUPS: EnvGroup[] = [
     ],
   },
   {
+    cat: 'Turn storage + client Supabase diagnostics',
+    checks: [
+      {
+        key: 'SUPABASE_TURNS_TABLE',
+        label: 'Supabase turns table (server)',
+        required: true,
+        validate: (value) =>
+          value
+            ? pass(`Using server table ${value}.`)
+            : fail('SUPABASE_TURNS_TABLE is required for turn writes; no fallback assumed.'),
+      },
+      {
+        key: 'NEXT_PUBLIC_SUPABASE_TURNS_TABLE',
+        label: 'Supabase turns table (client fallback)',
+        required: true,
+        validate: (value) => {
+          if (value) {
+            return pass(`Client turns table configured: ${value}`)
+          }
+
+          if (process.env.SUPABASE_TURNS_TABLE) {
+            return warn('Client fallback missing; relying on server SUPABASE_TURNS_TABLE only.')
+          }
+
+          return fail('Both SUPABASE_TURNS_TABLE and NEXT_PUBLIC_SUPABASE_TURNS_TABLE are missing.')
+        },
+      },
+      {
+        key: 'NEXT_PUBLIC_SUPABASE_URL',
+        label: 'Supabase URL (client)',
+        required: true,
+        validate: (value) =>
+          value
+            ? looksLikeURL(value)
+              ? pass('Client Supabase URL detected.')
+              : fail('NEXT_PUBLIC_SUPABASE_URL must be a full https:// URL.')
+            : fail('NEXT_PUBLIC_SUPABASE_URL missing; client storage diagnostics cannot run.'),
+      },
+      {
+        key: 'NEXT_PUBLIC_SUPABASE_STORAGE_BUCKET',
+        label: 'Supabase bucket (client)',
+        required: true,
+        validate: (value) =>
+          value
+            ? pass(`Client bucket: ${value}`)
+            : fail('NEXT_PUBLIC_SUPABASE_STORAGE_BUCKET missing; client diagnostics cannot mirror storage.'),
+      },
+      {
+        key: 'NEXT_PUBLIC_VERCEL_ENV',
+        label: 'Client Vercel environment',
+        required: true,
+        validate: (value) =>
+          value
+            ? pass(`Client-side environment: ${value}`)
+            : warn('NEXT_PUBLIC_VERCEL_ENV missing; client env summary will be incomplete.'),
+      },
+      {
+        key: 'NEXT_PUBLIC_DEFAULT_NOTIFY_EMAIL',
+        label: 'Default notification email (client)',
+        validate: (value) =>
+          value
+            ? looksLikeEmail(value)
+              ? pass('Client default email configured.')
+              : warn('Client default email present but format looks unusual.')
+            : warn('NEXT_PUBLIC_DEFAULT_NOTIFY_EMAIL missing; diagnostics will rely on server value.'),
+      },
+    ],
+  },
+  {
     cat: 'Google AI',
     checks: [
       {
@@ -178,12 +247,13 @@ const GROUPS: EnvGroup[] = [
       {
         key: 'OPENAI_API_KEY',
         label: 'OpenAI API key',
+        required: true,
         validate: (value) =>
           value
             ? looksLikeToken(value)
               ? pass('Token length looks valid.')
-              : warn('Token present but shorter than expected; verify key.')
-            : warn('Missing; OpenAI features will be disabled.'),
+              : fail('Token present but shorter than expected; verify key.', false)
+            : fail('OPENAI_API_KEY missing; OpenAI text and TTS calls will fail.'),
       },
       {
         key: 'OPENAI_DIAGNOSTICS_MODEL',
@@ -217,9 +287,10 @@ const GROUPS: EnvGroup[] = [
       {
         key: 'MAIL_FROM',
         label: 'Sender address',
+        required: true,
         validate: (value) => {
           if (!value) {
-            return warn('MAIL_FROM missing; providers may substitute an arbitrary default.')
+            return fail('MAIL_FROM missing; session summaries cannot be sent safely.')
           }
           if (FALLBACK_EMAILS.has(value)) {
             return warn('Using fallback MAIL_FROM; set a verified sender for production.')
@@ -260,12 +331,191 @@ const GROUPS: EnvGroup[] = [
     ],
   },
   {
+    cat: 'Deployment metadata + commits',
+    checks: [
+      {
+        key: 'NETLIFY',
+        label: 'Netlify platform flag',
+        validate: (value) => (value ? pass(`NETLIFY=${value}`) : warn('NETLIFY missing; platform detection may be off.')),
+      },
+      {
+        key: 'NETLIFY_DEV',
+        label: 'Netlify dev flag',
+        validate: (value) => (value ? pass(`NETLIFY_DEV=${value}`) : warn('NETLIFY_DEV missing; local dev context unknown.')),
+      },
+      {
+        key: 'NETLIFY_BLOBS_SITE_ID',
+        label: 'Netlify blobs site id',
+        validate: (value) =>
+          value ? pass('Netlify blobs site id detected.') : warn('NETLIFY_BLOBS_SITE_ID missing; blob API may reject writes.'),
+      },
+      {
+        key: 'NETLIFY_BLOBS_SITE_NAME',
+        label: 'Netlify blobs site name',
+        validate: (value) => (value ? pass('Blobs site name detected.') : warn('NETLIFY_BLOBS_SITE_NAME missing.')),
+      },
+      {
+        key: 'NETLIFY_CONTEXT',
+        label: 'Netlify context',
+        validate: (value) => (value ? pass(`Context ${value}.`) : warn('NETLIFY_CONTEXT missing; deploy summary incomplete.')),
+      },
+      {
+        key: 'NETLIFY_DEPLOY_ID',
+        label: 'Netlify deploy id',
+        validate: (value) => (value ? pass(`Netlify deploy id ${value}.`) : warn('NETLIFY_DEPLOY_ID missing; cannot trace deploy.')),
+      },
+      {
+        key: 'MY_DEPLOY_ID',
+        label: 'Custom deploy id',
+        validate: (value) => (value ? pass(`Custom deploy id ${value}.`) : warn('MY_DEPLOY_ID missing; custom deploy tracking disabled.')),
+      },
+      {
+        key: 'DEPLOY_ID',
+        label: 'Generic deploy id',
+        validate: (value) => (value ? pass(`DEPLOY_ID ${value}.`) : warn('DEPLOY_ID missing.')),
+      },
+      {
+        key: 'VERCEL_DEPLOYMENT_ID',
+        label: 'Vercel deployment id',
+        validate: (value) => (value ? pass(`Vercel deployment id ${value}.`) : warn('VERCEL_DEPLOYMENT_ID missing.')),
+      },
+      {
+        key: 'VERCEL_DEPLOY_ID',
+        label: 'Vercel deploy id',
+        validate: (value) => (value ? pass(`Vercel deploy id ${value}.`) : warn('VERCEL_DEPLOY_ID missing.')),
+      },
+      {
+        key: 'VERCEL_BUILD_ID',
+        label: 'Vercel build id',
+        validate: (value) => (value ? pass(`Vercel build id ${value}.`) : warn('VERCEL_BUILD_ID missing.')),
+      },
+      {
+        key: 'NEXT_PUBLIC_DEPLOY_ID',
+        label: 'Client deploy id',
+        validate: (value) =>
+          value ? pass(`Client deploy id ${value}.`) : warn('NEXT_PUBLIC_DEPLOY_ID missing; client deploy summary incomplete.'),
+      },
+      {
+        key: 'NETLIFY_SITE_ID',
+        label: 'Netlify site id',
+        validate: (value) => (value ? pass(`Netlify site id ${value}.`) : warn('NETLIFY_SITE_ID missing; site linkage unclear.')),
+      },
+      {
+        key: 'SITE_NAME',
+        label: 'Generic site name',
+        validate: (value) => (value ? pass(`Site name ${value}.`) : warn('SITE_NAME missing; site metadata incomplete.')),
+      },
+      {
+        key: 'NETLIFY_BLOBS_STORE',
+        label: 'Netlify blobs store',
+        validate: (value) => (value ? pass(`Blobs store ${value}.`) : warn('NETLIFY_BLOBS_STORE missing; blob diagnostics may fail.')),
+      },
+      {
+        key: 'NETLIFY_BLOBS_TOKEN',
+        label: 'Netlify blobs token',
+        validate: (value) => (value ? pass('Blobs token detected.') : warn('NETLIFY_BLOBS_TOKEN missing; blob auth may fail.')),
+      },
+      {
+        key: 'NETLIFY_BLOBS_API_URL',
+        label: 'Netlify blobs API URL',
+        validate: (value) =>
+          value ? pass('Blobs API URL configured.') : warn('NETLIFY_BLOBS_API_URL missing; blob diagnostics may pick defaults.'),
+      },
+      {
+        key: 'NETLIFY_BLOBS_EDGE_URL',
+        label: 'Netlify blobs edge URL',
+        validate: (value) => (value ? pass('Blobs edge URL configured.') : warn('NETLIFY_BLOBS_EDGE_URL missing.')),
+      },
+      {
+        key: 'NETLIFY_BLOBS_PUBLIC_BASE_URL',
+        label: 'Netlify blobs public URL',
+        validate: (value) =>
+          value ? pass('Public blobs base URL configured.') : warn('NETLIFY_BLOBS_PUBLIC_BASE_URL missing; public asset links may fail.'),
+      },
+      {
+        key: 'NEXT_PUBLIC_GITHUB_REPOSITORY',
+        label: 'Client GitHub repository',
+        validate: (value) => (value ? pass(`Client repo ${value}.`) : warn('NEXT_PUBLIC_GITHUB_REPOSITORY missing.')),
+      },
+      {
+        key: 'COMMIT_REF',
+        label: 'Commit ref',
+        validate: (value) => (value ? pass(`Commit ref ${value}.`) : warn('COMMIT_REF missing; deploy history unclear.')),
+      },
+      {
+        key: 'GIT_COMMIT_SHA',
+        label: 'Git commit SHA',
+        validate: (value) => (value ? pass(`Git SHA ${value}.`) : warn('GIT_COMMIT_SHA missing.')),
+      },
+      {
+        key: 'COMMIT_MESSAGE',
+        label: 'Commit message',
+        validate: (value) => (value ? pass('Commit message detected.') : warn('COMMIT_MESSAGE missing.')),
+      },
+      {
+        key: 'GIT_COMMIT_MESSAGE',
+        label: 'Git commit message',
+        validate: (value) => (value ? pass('Git commit message detected.') : warn('GIT_COMMIT_MESSAGE missing.')),
+      },
+      {
+        key: 'COMMIT_TIMESTAMP',
+        label: 'Commit timestamp',
+        validate: (value) => (value ? pass(`Commit timestamp ${value}.`) : warn('COMMIT_TIMESTAMP missing.')),
+      },
+      {
+        key: 'GIT_COMMIT_TIMESTAMP',
+        label: 'Git commit timestamp',
+        validate: (value) => (value ? pass(`Git commit timestamp ${value}.`) : warn('GIT_COMMIT_TIMESTAMP missing.')),
+      },
+      {
+        key: 'BRANCH',
+        label: 'Branch name',
+        validate: (value) => (value ? pass(`Branch ${value}.`) : warn('BRANCH missing.')),
+      },
+      {
+        key: 'HEAD',
+        label: 'HEAD ref',
+        validate: (value) => (value ? pass(`HEAD ${value}.`) : warn('HEAD missing; unable to reference current ref.')),
+      },
+    ],
+  },
+  {
+    cat: 'Runtime + upload diagnostics',
+    checks: [
+      {
+        key: 'AWS_REGION',
+        label: 'AWS region',
+        validate: (value) => (value ? pass(`AWS region ${value}.`) : warn('AWS_REGION missing; upload logging may be incomplete.')),
+      },
+      {
+        key: 'AWS_DEFAULT_REGION',
+        label: 'AWS default region',
+        validate: (value) =>
+          value ? pass(`AWS default region ${value}.`) : warn('AWS_DEFAULT_REGION missing; upload logging may be incomplete.'),
+      },
+      {
+        key: 'NEXT_RUNTIME',
+        label: 'Next.js runtime',
+        validate: (value) => (value ? pass(`NEXT_RUNTIME=${value}`) : pass('NEXT_RUNTIME not exported; assuming node runtime.')),
+      },
+    ],
+  },
+  {
     cat: 'Application & System',
     checks: [
       {
         key: 'PROVIDER',
         label: 'Audio provider override',
-        validate: (value) => (value ? pass(`Provider forced to ${value}.`) : pass('Using default provider heuristics.')),
+        required: true,
+        validate: (value) => {
+          if (!value) {
+            return fail('PROVIDER must be set to "google" for audio diagnostics.')
+          }
+          if (value !== 'google') {
+            return fail(`PROVIDER must be "google"; received "${value}".`)
+          }
+          return pass('Audio provider locked to google.')
+        },
       },
       {
         key: 'NODE_VERSION',
@@ -329,11 +579,6 @@ const GROUPS: EnvGroup[] = [
               ? pass('Site URL detected.')
               : fail('URL should be a full URL starting with http(s)://', false)
             : warn('Primary site URL missing; configure a production domain.'),
-      },
-      {
-        key: 'NEXT_RUNTIME',
-        label: 'Next.js runtime',
-        validate: (value) => (value ? pass(`NEXT_RUNTIME=${value}`) : pass('NEXT_RUNTIME not exported; assuming node runtime.')),
       },
       {
         key: 'GITHUB_REPOSITORY',
