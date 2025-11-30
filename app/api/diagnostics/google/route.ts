@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server"
 import { jsonErrorResponse } from "@/lib/api-error"
-import { createClient } from "@supabase/supabase-js"
+import { resolveGoogleModel, getGoogleClient } from "@/lib/google"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -9,32 +9,40 @@ export const fetchCache = "force-no-store"
 export async function GET() {
   const timestamp = new Date().toISOString()
 
-  const supabaseUrl = process.env.SUPABASE_URL ?? ""
-  const supabaseAnonKey = process.env.SUPABASE_ANON_KEY ?? ""
+  const googleModel = resolveGoogleModel(process.env.GOOGLE_MODEL)
+  const apiKey = process.env.GOOGLE_API_KEY ?? ""
 
-  // Summarize env without leaking secrets
   const envSummary = {
-    supabaseUrl: supabaseUrl ? "set" : "missing",
-    supabaseAnonKey: supabaseAnonKey ? "set" : "missing",
+    googleApiKey: apiKey ? "set" : "missing",
+    googleModel,
   }
 
-  // Create a safe client even if values are blank
-  const supabase = createClient(supabaseUrl || "https://example.com", supabaseAnonKey || "public-anon-key")
-
   try {
-    // Run a *very cheap* RLS-safe ping
-    const { error } = await supabase.from("conversation_turns").select("id").limit(1)
+    if (!apiKey) throw new Error("GOOGLE_API_KEY must be set")
+
+    const client = getGoogleClient(googleModel)
+
+    const result = await client.generateContent("diagnostics-ping")
+
+    const output =
+      result?.response?.text?.() ??
+      null
 
     return NextResponse.json({
-      ok: !error,
+      ok: true,
       timestamp,
       envSummary,
-      ping: error ? `Error: ${error.message}` : "success",
+      diagnostics: {
+        modelUsed: googleModel,
+        output,
+      },
     })
+
   } catch (err: any) {
-    return jsonErrorResponse(
-      "supabase-diagnostics-error",
-      `timestamp=${timestamp}; error=${err?.message ?? String(err)}`
-    )
+    return jsonErrorResponse("google-diagnostics-error", {
+      timestamp,
+      envSummary,
+      error: err?.message ?? String(err),
+    })
   }
 }
