@@ -1,0 +1,44 @@
+Google Gemini Usage Audit (prior findings)
+=========================================
+
+REAL GOOGLE USAGE CONFIRMED: yes
+
+Where Google calls actually occur
+- app/api/ask-audio/route.ts: builds a Gemini prompt, resolves GOOGLE_MODEL, and POSTs directly to https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent using GOOGLE_API_KEY (audio + text flow).
+- app/api/session/[id]/intro/route.ts: resolves GOOGLE_MODEL and POSTs to the same Gemini endpoint for intro generation, authenticated via GOOGLE_API_KEY.
+- app/api/diagnostics/google/route.ts: instantiates GoogleGenerativeAI from @google/generative-ai, resolves the model, and invokes model.generateContent("ping").
+
+Files referencing Google models without invoking Google APIs
+- lib/google.ts resolves GOOGLE_MODEL but uses it only as the model argument to OpenAI chat.completions.create, not a Google client.
+
+resolveGoogleModel usage trace
+- Call sites: app/api/ask-audio/route.ts (feeds Google fetch), app/api/session/[id]/intro/route.ts (feeds Google fetch), app/api/diagnostics/google/route.ts (feeds GoogleGenerativeAI), and lib/google.ts (feeds OpenAI chat).
+- Note: implementation of resolveGoogleModel not present; imports point to the same path, implying a missing/exported stub. The string it would return is consumed by real Google calls in the first three files and by OpenAI in lib/google.ts.
+
+Inference clients actually used
+- Google Gemini via direct REST calls in ask-audio and session intro.
+- Google Gemini via SDK in app/api/diagnostics/google/route.ts.
+- OpenAI Chat Completions for interview follow-ups (lib/ai.ts) and for the “google” diagnostics route that actually pings OpenAI (lib/google.ts).
+- No other third-party text-generation clients found.
+
+TTS client
+- Only synthesizeSpeechWithOpenAi is implemented, using OpenAI audio speech API; /api/tts delegates directly to it. No Google TTS usage found.
+
+Environment variables referencing Google
+- GOOGLE_API_KEY, GOOGLE_MODEL, and PROVIDER=google gating are used in the Google inference paths and diagnostics (ask-audio, session intro, diagnostics/env, diagnostics/google).
+
+Inference pipeline summary
+- Conversational content: Google paths (ask-audio, session intro, diagnostics/google) and OpenAI paths (lib/ai.ts follow-ups, lib/google.ts diagnostics hitting OpenAI).
+- TTS: OpenAI only (lib/openaiTts.ts and /api/tts).
+
+Recommended refactor steps to remove Google completely
+- Replace Google fetch calls in app/api/ask-audio/route.ts and app/api/session/[id]/intro/route.ts with non-Google equivalents; remove PROVIDER=google logic if unused.
+- Delete or stub out app/api/diagnostics/google/route.ts and related UI hooks.
+- Remove Google env vars from diagnostics and README; eliminate resolveGoogleModel usage or replace with non-Google model resolution.
+- Remove @google/generative-ai dependency if unused elsewhere.
+
+Recommended steps if we want to reintroduce real Google usage
+- Implement and export resolveGoogleModel in lib/google.ts (or a dedicated module) to validate/normalize Gemini model names.
+- Centralize Google client creation (REST and SDK) with robust error logging and env validation before request dispatch.
+- Add integration tests hitting a mock Gemini endpoint to verify prompt assembly for ask-audio and session intro.
+- Ensure diagnostics distinguish between OpenAI and Google paths so health checks match the actual provider used.
