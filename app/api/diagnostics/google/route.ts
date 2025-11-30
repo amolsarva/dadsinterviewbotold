@@ -52,6 +52,7 @@ export async function GET() {
     const client = getGoogleClient(googleModel)
     logDiagnostic("log", "client-initialized", envSummary, { modelUsed: googleModel })
 
+    // Minimal, stable Gemini request
     const result = await client.generateContent("diagnostics-ping")
 
     const output = result?.response?.text?.() ?? null
