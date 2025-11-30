@@ -1,5 +1,7 @@
+// turn-service.ts — safe, minimal, no introspection
+
 import { putBlobFromBuffer } from './blob'
-import { describeDatabaseMetaEnv, getCachedConversationTurnsTable, getConversationTurnsTable } from '@/db/meta'
+import { getConversationTurnsTable } from '@/db/meta'
 import { getSupabaseClient, logBlobDiagnostic } from '@/utils/blob-env'
 import { type ConversationTurnInsert, type ConversationTurnRow } from '@/types/turns'
 
@@ -37,62 +39,64 @@ type SaveTurnParams = {
 
 type SaveTurnResult = ConversationTurnRow
 
-type ConversationTurnTable = {
-  Row: ConversationTurnRow
-  Insert: ConversationTurnInsert
-  Update: Partial<ConversationTurnRow>
-  Relationships: []
-}
-
-const diagnosticsTimestamp = () => new Date().toISOString()
-
-function envSummary() {
-  return {
-    supabaseUrl: process.env.SUPABASE_URL ? 'set' : 'missing',
-    supabaseBucket: process.env.SUPABASE_STORAGE_BUCKET || null,
-    supabaseServiceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY
-      ? `${process.env.SUPABASE_SERVICE_ROLE_KEY.length} chars`
-      : null,
-    supabaseTurnsTable: process.env.SUPABASE_TURNS_TABLE || null,
-    cachedTurnsTable: getCachedConversationTurnsTable(),
-  }
-}
+const nowISO = () => new Date().toISOString()
 
 function logTurnDiagnostic(level: DiagnosticLevel, step: string, payload?: Record<string, unknown>) {
-  const entry = { env: envSummary(), ...(payload ?? {}) }
-  const message = `[diagnostic] ${diagnosticsTimestamp()} ${step} ${JSON.stringify(entry)}`
-  if (level === 'error') {
-    console.error(message)
-  } else {
-    console.log(message)
-  }
+  const entry = { ...(payload ?? {}) }
+  const message = `[diagnostic] ${nowISO()} ${step} ${JSON.stringify(entry)}`
+  level === 'error' ? console.error(message) : console.log(message)
 }
 
-export async function assertTurnsTableConfigured() {
+/**
+ * Simple, safe table assertion.
+ *
+ * This avoids ANY introspection, ANY metadata RPC, ANY schema calls.
+ * It performs a single safe query:
+ *   SELECT * FROM <table> LIMIT 1;
+ * which is guaranteed not to trigger Supabase schema validation errors.
+ */
+export async function assertTurnsTableConfigured(): Promise<string> {
   const table = await getConversationTurnsTable()
-  logTurnDiagnostic('log', 'saveTurn:table:asserted', { table })
+  const client = getSupabaseClient()
+
+  const { error } = await client.from(table).select('id').limit(1)
+
+  if (error) {
+    logTurnDiagnostic('error', 'turns-table:unavailable', { table, error: error.message })
+    throw new Error(`Turns table '${table}' is not available: ${error.message}`)
+  }
+
+  logTurnDiagnostic('log', 'turns-table:ok', { table })
   return table
 }
 
+/**
+ * Upload audio file for a turn.
+ */
 export async function uploadAudio(params: UploadAudioParams): Promise<UploadAudioResult> {
   const { sessionId, turn, role, base64, mime, label = 'audio' } = params
-  const timestamp = diagnosticsTimestamp()
   const buffer = Buffer.from(base64, 'base64')
   const ext = mime.split('/')[1]?.split(';')[0] || 'webm'
   const path = `sessions/${sessionId}/${role}-${String(turn).padStart(4, '0')}.${ext}`
 
-  logTurnDiagnostic('log', 'uploadAudio:start', { timestamp, path, mime, bytes: buffer.byteLength, label })
+  logTurnDiagnostic('log', 'uploadAudio:start', { path, mime, bytes: buffer.byteLength, label })
+
   const blob = await putBlobFromBuffer(path, buffer, mime, { access: 'public' })
   const url = blob.downloadUrl || blob.url
+
   if (!url) {
     const message = 'Upload succeeded but no URL was returned.'
-    logTurnDiagnostic('error', 'uploadAudio:url-missing', { path, mime, bytes: buffer.byteLength, label })
+    logTurnDiagnostic('error', 'uploadAudio:url-missing', { path })
     throw new Error(message)
   }
-  logTurnDiagnostic('log', 'uploadAudio:success', { path, mime, bytes: buffer.byteLength, url, label })
+
+  logTurnDiagnostic('log', 'uploadAudio:success', { path, url })
   return { url, path, bytes: buffer.byteLength, mime, label }
 }
 
+/**
+ * Upload manifest file for a turn.
+ */
 export async function uploadTurnManifest({
   sessionId,
   turn,
@@ -104,20 +108,29 @@ export async function uploadTurnManifest({
 }) {
   const manifestPath = `sessions/${sessionId}/turn-${String(turn).padStart(4, '0')}.json`
   const body = JSON.stringify(manifest, null, 2)
+
   logTurnDiagnostic('log', 'uploadManifest:start', { manifestPath, bytes: body.length })
-  const blob = await putBlobFromBuffer(manifestPath, Buffer.from(body, 'utf8'), 'application/json', {
-    access: 'public',
-  })
+
+  const blob = await putBlobFromBuffer(
+    manifestPath,
+    Buffer.from(body, 'utf8'),
+    'application/json',
+    { access: 'public' }
+  )
+
   const url = blob.downloadUrl || blob.url
   if (!url) {
-    const message = 'Manifest upload returned no URL.'
     logTurnDiagnostic('error', 'uploadManifest:url-missing', { manifestPath })
-    throw new Error(message)
+    throw new Error('Manifest upload returned no URL.')
   }
+
   logTurnDiagnostic('log', 'uploadManifest:success', { manifestPath, url })
   return { url, path: manifestPath }
 }
 
+/**
+ * Pass-through transcription logic.
+ */
 export async function transcribeAudio({
   transcript,
   note,
@@ -126,18 +139,23 @@ export async function transcribeAudio({
   note?: string
 }) {
   logTurnDiagnostic('log', 'transcribeAudio:start', { note: note || null })
+
   if (transcript && transcript.trim().length) {
-    logTurnDiagnostic('log', 'transcribeAudio:passthrough', { note: 'provided transcript used' })
     return { transcript: transcript.trim(), source: 'provided' as const }
   }
-  const message = 'transcribeAudio requires an audio transcription backend; none configured.'
+
+  const message = 'transcribeAudio requires a transcription backend; none configured.'
   logTurnDiagnostic('error', 'transcribeAudio:missing-backend', { message })
   throw new Error(message)
 }
 
+/**
+ * Save turn row to Supabase.
+ */
 export async function saveTurn(params: SaveTurnParams): Promise<SaveTurnResult> {
-  const table = await getConversationTurnsTable()
+  const table = await assertTurnsTableConfigured()
   const client = getSupabaseClient()
+
   const payload: ConversationTurnInsert = {
     session_id: params.sessionId,
     turn: params.turn,
@@ -152,24 +170,34 @@ export async function saveTurn(params: SaveTurnParams): Promise<SaveTurnResult> 
   }
 
   logTurnDiagnostic('log', 'saveTurn:start', { table, payload })
+
   const { data, error, status } = await client
-    .from<string, ConversationTurnTable>(table)
+    .from(table)
     .insert(payload)
     .select('*')
     .single()
+
   if (error || !data) {
     const message = error?.message || 'Supabase insert returned no data'
     logTurnDiagnostic('error', 'saveTurn:failure', { table, status, error: message })
     throw new Error(message)
   }
-  const record = data as ConversationTurnRow
-  logTurnDiagnostic('log', 'saveTurn:success', { table, status, id: record.id })
-  return record as SaveTurnResult
+
+  logTurnDiagnostic('log', 'saveTurn:success', { table, status, id: data.id })
+  return data as SaveTurnResult
 }
 
+/**
+ * Expose env summary for diagnostics; no schema or metadata access.
+ */
 export function describeTurnEnv() {
-  const summary = envSummary()
-  describeDatabaseMetaEnv()
+  const summary = {
+    supabaseUrl: process.env.SUPABASE_URL ? 'set' : 'missing',
+    supabaseBucket: process.env.SUPABASE_STORAGE_BUCKET || null,
+    supabaseServiceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY ? 'set' : null,
+    supabaseTurnsTable: process.env.SUPABASE_TURNS_TABLE || null,
+  }
+
   logBlobDiagnostic('log', 'turn-env-summary', summary)
   return summary
 }
