@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { jsonErrorResponse } from '@/lib/api-error'
 import { primeNetlifyBlobContextFromHeaders } from '@/lib/blob'
-import { describeTurnEnv } from '@/lib/turn-service'
+import { assertTurnsTableConfigured, describeTurnEnv } from '@/lib/turn-service'
 import { diagnosticEnvSummary } from '@/lib/data'
 
 export const runtime = 'nodejs'
@@ -47,16 +47,16 @@ function logDiagnostic(level: 'log' | 'error', step: string, payload?: Record<st
   }
 }
 
-function ensureRequiredEnv() {
+async function ensureRequiredEnv() {
   const missing: string[] = []
   if (!process.env.SUPABASE_URL) missing.push('SUPABASE_URL')
   if (!process.env.SUPABASE_SERVICE_ROLE_KEY) missing.push('SUPABASE_SERVICE_ROLE_KEY')
-  if (!process.env.SUPABASE_TURNS_TABLE) missing.push('SUPABASE_TURNS_TABLE')
   if (missing.length) {
     const message = `Missing required env vars for turn diagnostics: ${missing.join(', ')}. No defaults are assumed.`
     logDiagnostic('error', 'env:missing', { missing })
     throw new Error(message)
   }
+  await assertTurnsTableConfigured()
 }
 
 async function postJson(url: string, label: string, body: Record<string, unknown>) {
@@ -86,7 +86,7 @@ async function postJson(url: string, label: string, body: Record<string, unknown
 export async function POST(request: Request) {
   const steps: StepResult[] = []
   try {
-    ensureRequiredEnv()
+    await ensureRequiredEnv()
     try {
       primeNetlifyBlobContextFromHeaders(request.headers)
     } catch (error) {

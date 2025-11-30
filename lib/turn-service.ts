@@ -1,5 +1,7 @@
 import { putBlobFromBuffer } from './blob'
+import { describeDatabaseMetaEnv, getCachedConversationTurnsTable, getConversationTurnsTable } from '@/db/meta'
 import { getSupabaseClient, logBlobDiagnostic } from '@/utils/blob-env'
+import { type ConversationTurnInsert, type ConversationTurnRow } from '@/types/turns'
 
 type DiagnosticLevel = 'log' | 'error'
 
@@ -33,20 +35,7 @@ type SaveTurnParams = {
   assistantDurationMs?: number | null
 }
 
-type SaveTurnResult = {
-  id: string
-  session_id: string
-  turn: number
-  transcript: string
-  assistant_reply: string | null
-  provider: string | null
-  manifest_url: string | null
-  user_audio_url: string | null
-  assistant_audio_url: string | null
-  duration_ms: number | null
-  assistant_duration_ms: number | null
-  created_at?: string
-}
+type SaveTurnResult = ConversationTurnRow
 
 const diagnosticsTimestamp = () => new Date().toISOString()
 
@@ -58,6 +47,7 @@ function envSummary() {
       ? `${process.env.SUPABASE_SERVICE_ROLE_KEY.length} chars`
       : null,
     supabaseTurnsTable: process.env.SUPABASE_TURNS_TABLE || null,
+    cachedTurnsTable: getCachedConversationTurnsTable(),
   }
 }
 
@@ -71,38 +61,8 @@ function logTurnDiagnostic(level: DiagnosticLevel, step: string, payload?: Recor
   }
 }
 
-function resolveTurnsTable() {
-  const serverTable = typeof process.env.SUPABASE_TURNS_TABLE === 'string'
-    ? process.env.SUPABASE_TURNS_TABLE.trim()
-    : ''
-  const publicTable = typeof process.env.NEXT_PUBLIC_SUPABASE_TURNS_TABLE === 'string'
-    ? process.env.NEXT_PUBLIC_SUPABASE_TURNS_TABLE.trim()
-    : ''
-
-  if (serverTable) {
-    logTurnDiagnostic('log', 'saveTurn:table:resolved', {
-      source: 'SUPABASE_TURNS_TABLE',
-      table: serverTable,
-    })
-    return serverTable
-  }
-
-  if (publicTable) {
-    logTurnDiagnostic('log', 'saveTurn:table:resolved', {
-      source: 'NEXT_PUBLIC_SUPABASE_TURNS_TABLE',
-      table: publicTable,
-      note: 'Using public env var for server-side Supabase writes; ensure parity across environments.',
-    })
-    return publicTable
-  }
-
-  const message = 'SUPABASE_TURNS_TABLE is required to save turns; no default is assumed.'
-  logTurnDiagnostic('error', 'saveTurn:table:missing', { message })
-  throw new Error(message)
-}
-
-export function assertTurnsTableConfigured() {
-  const table = resolveTurnsTable()
+export async function assertTurnsTableConfigured() {
+  const table = await getConversationTurnsTable()
   logTurnDiagnostic('log', 'saveTurn:table:asserted', { table })
   return table
 }
@@ -169,9 +129,9 @@ export async function transcribeAudio({
 }
 
 export async function saveTurn(params: SaveTurnParams): Promise<SaveTurnResult> {
-  const table = resolveTurnsTable()
+  const table = await getConversationTurnsTable()
   const client = getSupabaseClient()
-  const payload = {
+  const payload: ConversationTurnInsert = {
     session_id: params.sessionId,
     turn: params.turn,
     transcript: params.transcript,
@@ -185,7 +145,11 @@ export async function saveTurn(params: SaveTurnParams): Promise<SaveTurnResult> 
   }
 
   logTurnDiagnostic('log', 'saveTurn:start', { table, payload })
-  const { data, error, status } = await client.from(table).insert(payload).select('*').single()
+  const { data, error, status } = await client
+    .from<ConversationTurnRow>(table)
+    .insert(payload)
+    .select('*')
+    .single()
   if (error || !data) {
     const message = error?.message || 'Supabase insert returned no data'
     logTurnDiagnostic('error', 'saveTurn:failure', { table, status, error: message })
@@ -197,6 +161,7 @@ export async function saveTurn(params: SaveTurnParams): Promise<SaveTurnResult> 
 
 export function describeTurnEnv() {
   const summary = envSummary()
+  describeDatabaseMetaEnv()
   logBlobDiagnostic('log', 'turn-env-summary', summary)
   return summary
 }

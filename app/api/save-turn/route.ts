@@ -53,7 +53,7 @@ export async function POST(req: NextRequest) {
     url: req.url,
   })
   try {
-    const table = assertTurnsTableConfigured()
+    const table = await assertTurnsTableConfigured()
     logRouteEvent('log', 'save-turn:turn-table:ready', { turnsTable: table })
   } catch (error) {
     logRouteEvent('error', 'save-turn:turn-table:missing', {
