@@ -9,14 +9,14 @@ export const fetchCache = "force-no-store"
 export async function GET() {
   const timestamp = new Date().toISOString()
 
+  const modelName = process.env.GOOGLE_MODEL ?? ""
   const envSummary = {
     googleApiKey: process.env.GOOGLE_API_KEY ? "set" : "missing",
-    model: process.env.GOOGLE_MODEL ?? null,
+    model: modelName || "missing",
   }
 
   try {
-    // Pass env so the helper can resolve the model correctly
-    const model = resolveGoogleModel(process.env)
+    const model = resolveGoogleModel(modelName)
     const result = await model.generateContent("ping")
 
     return NextResponse.json({
