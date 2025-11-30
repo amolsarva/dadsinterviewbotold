@@ -6,8 +6,28 @@ export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
 export const fetchCache = "force-no-store"
 
+function diagnosticsTimestamp() {
+  return new Date().toISOString()
+}
+
+function logDiagnostic(
+  level: "log" | "error",
+  step: string,
+  envSummary: Record<string, string>,
+  details?: Record<string, unknown>,
+) {
+  const payload = {
+    step,
+    timestamp: diagnosticsTimestamp(),
+    envSummary,
+    ...(details ?? {}),
+  }
+  const message = `[diagnostic] ${payload.timestamp} google:${step} ${JSON.stringify(payload)}`
+  return level === "error" ? console.error(message) : console.log(message)
+}
+
 export async function GET() {
-  const timestamp = new Date().toISOString()
+  const timestamp = diagnosticsTimestamp()
 
   const googleModel = resolveGoogleModel(process.env.GOOGLE_MODEL)
   const apiKey = process.env.GOOGLE_API_KEY ?? ""
@@ -15,18 +35,30 @@ export async function GET() {
   const envSummary = {
     googleApiKey: apiKey ? "set" : "missing",
     googleModel,
+    modelSource: "GOOGLE_MODEL",
   }
 
   try {
-    if (!apiKey) throw new Error("GOOGLE_API_KEY must be set")
+    logDiagnostic("log", "start", envSummary, {
+      note: "Diagnostics shares production GOOGLE_MODEL/GOOGLE_API_KEY. No diagnostics-only defaults are used.",
+    })
+
+    if (!apiKey) {
+      const error = new Error("GOOGLE_API_KEY must be set for diagnostics to mirror production")
+      logDiagnostic("error", "missing-api-key", envSummary, { error: error.message })
+      throw error
+    }
 
     const client = getGoogleClient(googleModel)
+    logDiagnostic("log", "client-initialized", envSummary, { modelUsed: googleModel })
 
     const result = await client.generateContent("diagnostics-ping")
 
-    const output =
-      result?.response?.text?.() ??
-      null
+    const output = result?.response?.text?.() ?? null
+
+    logDiagnostic("log", "generate-content:success", envSummary, {
+      outputPreview: output ? output.slice(0, 100) : null,
+    })
 
     return NextResponse.json({
       ok: true,
@@ -37,9 +69,12 @@ export async function GET() {
         output,
       },
     })
-
   } catch (err: any) {
-    return jsonErrorResponse("google-diagnostics-error", {
+    logDiagnostic("error", "failed", envSummary, {
+      error: err instanceof Error ? err.message : String(err),
+    })
+
+    return jsonErrorResponse(err, "Google diagnostics failed", undefined, {
       timestamp,
       envSummary,
       error: err?.message ?? String(err),
