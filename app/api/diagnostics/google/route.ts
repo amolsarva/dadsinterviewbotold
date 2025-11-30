@@ -22,8 +22,11 @@ export async function GET() {
 
     const client = getGoogleClient(googleModel)
 
-    // simplest "ping" request
     const result = await client.generateContent("diagnostics-ping")
+
+    const output =
+      result?.response?.text?.() ??
+      null
 
     return NextResponse.json({
       ok: true,
@@ -31,12 +34,10 @@ export async function GET() {
       envSummary,
       diagnostics: {
         modelUsed: googleModel,
-        output:
-          result?.response?.text() ??
-          result?.candidates?.[0]?.content?.parts?.[0]?.text ??
-          null,
+        output,
       },
     })
+
   } catch (err: any) {
     return jsonErrorResponse("google-diagnostics-error", {
       timestamp,
