@@ -64,6 +64,10 @@ function withSessionsTableHint(step: string, message: string) {
   const hint =
     'Set SUPABASE_SESSIONS_TABLE to the correct Supabase table and ensure it exists with id, email_to, status, and duration_ms columns.'
   const schemaErrorPattern = /(schema cache|does not exist|missing relation)/i
+  const missingTurnsColumnPattern = /'turns' column/i
+  if (missingTurnsColumnPattern.test(message)) {
+    return `${message} | Sessions table does not persist a "turns" column; sanitize payloads before writing or add a JSON column intentionally.`
+  }
   if (schemaErrorPattern.test(message)) {
     return `${message} | ${hint}`
   }
@@ -91,6 +95,18 @@ function assertEnv(name: string): string {
   return value
 }
 
+function sanitizeSessionPayload(record: SessionRecord, table: string): Omit<SessionRecord, 'turns'> {
+  const { turns, ...rest } = record
+  if (Array.isArray(turns) && turns.length) {
+    log('log', 'upsert:sanitize', {
+      sessionId: record.id,
+      table,
+      removedTurnCount: turns.length,
+    })
+  }
+  return rest
+}
+
 let cachedClient: SupabaseClient | null = null
 
 export function getSupabaseSessionClient(): SupabaseClient {
@@ -108,11 +124,16 @@ export function getSupabaseSessionClient(): SupabaseClient {
 export async function upsertSessionRecord(record: SessionRecord): Promise<SessionRecord> {
   const supabase = getSupabaseSessionClient()
   const table = sessionsTableName('upsert:start')
-  log('log', 'upsert:start', { sessionId: record.id, table })
+  const sanitizedRecord = sanitizeSessionPayload(record, table)
+  log('log', 'upsert:start', {
+    sessionId: record.id,
+    table,
+    turnsIncluded: Array.isArray(record.turns) ? record.turns.length : 0,
+  })
 
   const { data, error } = await supabase
     .from(table)
-    .upsert(record)
+    .upsert(sanitizedRecord)
     .select()
     .eq('id', record.id)
     .maybeSingle()
