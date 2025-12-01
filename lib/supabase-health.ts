@@ -16,6 +16,7 @@ const envSummary = () => ({
     : 'missing',
   SUPABASE_STORAGE_BUCKET: process.env.SUPABASE_STORAGE_BUCKET ?? 'missing',
   SUPABASE_TURNS_TABLE: process.env.SUPABASE_TURNS_TABLE ?? 'missing',
+  SUPABASE_SESSIONS_TABLE: process.env.SUPABASE_SESSIONS_TABLE ?? 'missing',
 });
 
 function log(level: LogLevel, step: string, payload: Record<string, unknown> = {}) {
@@ -46,11 +47,13 @@ function getSupabaseEnvOrThrow() {
   const supabaseUrl = process.env.SUPABASE_URL?.trim();
   const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
   const bucketName = process.env.SUPABASE_STORAGE_BUCKET?.trim();
+  const sessionsTable = process.env.SUPABASE_SESSIONS_TABLE?.trim();
 
   const missing: string[] = [];
   if (!supabaseUrl) missing.push('SUPABASE_URL');
   if (!serviceRoleKey) missing.push('SUPABASE_SERVICE_ROLE_KEY');
   if (!bucketName) missing.push('SUPABASE_STORAGE_BUCKET');
+  if (!sessionsTable) missing.push('SUPABASE_SESSIONS_TABLE');
 
   if (missing.length) {
     const message = `Supabase health check missing required env vars: ${missing.join(', ')}`;
@@ -62,11 +65,12 @@ function getSupabaseEnvOrThrow() {
     throw new Error('Supabase health check requires SUPABASE_TURNS_TABLE to be set explicitly.');
   }
 
-  return { supabaseUrl, serviceRoleKey, bucketName, table } as {
+  return { supabaseUrl, serviceRoleKey, bucketName, table, sessionsTable } as {
     supabaseUrl: string;
     serviceRoleKey: string;
     bucketName: string;
     table: string;
+    sessionsTable: string;
   };
 }
 
@@ -108,6 +112,8 @@ function recoverMessage(name: string) {
       return 'Set SUPABASE_SERVICE_ROLE_KEY (full service key) in env and verify it via a curl to any REST endpoint.';
     case 'validateTurnsTableSchema':
       return 'Ensure SUPABASE_TURNS_TABLE exists in Supabase Table Editor and columns match expectations.';
+    case 'validateSessionsTableSchema':
+      return 'Set SUPABASE_SESSIONS_TABLE to the sessions table name or create it with expected columns (id, email_to, status).';
     case 'validateStorageBucketExists':
       return 'Create the bucket named in SUPABASE_STORAGE_BUCKET or grant the service role access to it.';
     case 'validateStorageWrite':
@@ -135,6 +141,17 @@ async function validateTurnsTableSchema(supabase: SupabaseClient, table: string)
     if (error) throw new Error(`Turns table "${table}" not accessible: ${error.message}`);
 
     return { details: `Turns table "${table}" exists.` };
+  });
+}
+
+// ---- CHECK 2b: Sessions table exists ----
+async function validateSessionsTableSchema(supabase: SupabaseClient, sessionsTable: string) {
+  return safe('validateSessionsTableSchema', async () => {
+    const { error } = await supabase.from(sessionsTable).select('id', { head: true }).limit(1);
+
+    if (error) throw new Error(`Sessions table "${sessionsTable}" not accessible: ${error.message}`);
+
+    return { details: `Sessions table "${sessionsTable}" exists.` };
   });
 }
 
@@ -174,12 +191,13 @@ export async function runSupabaseHealthCheck() {
   const started = Date.now();
   log('log', 'start');
   try {
-    const { supabaseUrl, serviceRoleKey, bucketName, table } = getSupabaseEnvOrThrow();
+    const { supabaseUrl, serviceRoleKey, bucketName, table, sessionsTable } = getSupabaseEnvOrThrow();
     const supabase = createClient(supabaseUrl, serviceRoleKey);
 
     const checks = await Promise.all([
       validateServiceRoleKey(supabase),
       validateTurnsTableSchema(supabase, table),
+      validateSessionsTableSchema(supabase, sessionsTable),
       validateStorageBucketExists(supabase, bucketName),
       validateStorageWrite(supabase, bucketName),
     ]);
@@ -190,7 +208,7 @@ export async function runSupabaseHealthCheck() {
       ok,
       checksSummary: checks.map((c) => ({ name: c.name, ok: c.ok })),
     });
-    return { ok, timestamp: new Date().toISOString(), bucketName, table, checks };
+    return { ok, timestamp: new Date().toISOString(), bucketName, table, sessionsTable, checks };
   } catch (error) {
     const normalized = normalizeError(error);
     log('error', 'fatal', {

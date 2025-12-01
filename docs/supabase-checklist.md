@@ -7,6 +7,7 @@ This project will fail fast when Supabase is misconfigured. Use this list to mak
 - `SUPABASE_SERVICE_ROLE_KEY` — service role key (not the anon key) for database + storage writes.
 - `SUPABASE_STORAGE_BUCKET` — bucket name to read/write audio and manifests.
 - `SUPABASE_TURNS_TABLE` — turns table name (optional but recommended; otherwise discovery is attempted).
+- `SUPABASE_SESSIONS_TABLE` — **required** sessions table name; no default is assumed.
 
 ## Required environment variables (client diagnostics)
 - `NEXT_PUBLIC_SUPABASE_TURNS_TABLE` — public hint for the turns table name.
@@ -24,11 +25,16 @@ This project will fail fast when Supabase is misconfigured. Use this list to mak
    - Additional columns used by inserts: `assistant_reply`, `provider`, `manifest_url`, `user_audio_url`, `assistant_audio_url`, `duration_ms`, `assistant_duration_ms`.
    - If you provide `SUPABASE_TURNS_TABLE`, it must point to a table with the above columns; otherwise requests will fail early with a clear error.
 
-3. **RLS / policies**
+3. **Sessions table shape**
+   - Table must include at least `id`, `created_at`, `email_to`, `status`, and `duration_ms` columns; optional columns include `user_handle`, `title`, `artifacts`, and `total_turns`.
+   - `SUPABASE_SESSIONS_TABLE` must be set to this table name explicitly; diagnostics will fail fast if it is missing or misnamed.
+   - Grant the service role read/write access so health checks and upserts do not return "Could not find the table public.<name>" errors.
+
+4. **RLS / policies**
    - Database and storage operations rely on the service role; ensure the key is active and not restricted.
    - If you add RLS policies, keep service role access or adjust the code to use an allowed key.
 
-4. **Network + domain expectations**
+5. **Network + domain expectations**
    - `SUPABASE_URL` host must end with `.supabase.co` or `.supabase.net`.
    - Outbound network access to Supabase must be allowed from the deployment platform.
 

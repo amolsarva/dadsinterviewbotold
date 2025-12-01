@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import OpenAI from 'openai'
 import { getSupabaseBucket, getSupabaseClient, snapshotSupabaseEnv } from '@/utils/blob-env'
+import { sessionDbHealth } from '@/lib/session-store'
 
 export const runtime = 'nodejs'
 
@@ -52,6 +53,7 @@ const SUPABASE_HYPOTHESES = [
   'Service role key could still be the placeholder value.',
   'Supabase bucket may not exist or be readable with service role.',
   'Turns table hints may be missing for server or client.',
+  'Sessions table could be missing or misnamed (SUPABASE_SESSIONS_TABLE).',
   'SUPABASE_STORAGE_BUCKET might be unset or typoed.',
   'Cached Supabase client errors may persist until restart.',
   'Service role key length could indicate an incomplete copy.',
@@ -72,6 +74,7 @@ const envSnapshot = () => {
       ? `${supabaseEnv.SUPABASE_SERVICE_ROLE_KEY.length} chars`
       : 'missing',
     SUPABASE_STORAGE_BUCKET: supabaseEnv.SUPABASE_STORAGE_BUCKET ?? 'missing',
+    SUPABASE_SESSIONS_TABLE: process.env.SUPABASE_SESSIONS_TABLE?.trim() || 'missing',
   }
 }
 
@@ -185,6 +188,24 @@ async function runHypotheses(): Promise<HypothesisResult[]> {
   const openaiChat = await probeOpenAIChat()
   const openaiTts = await probeOpenAITts()
   const supabaseBucket = await probeSupabaseBucket()
+  let sessionsTableHealth: Awaited<ReturnType<typeof sessionDbHealth>> | null = null
+  try {
+    sessionsTableHealth = await sessionDbHealth()
+    log('log', 'supabase-sessions:health', {
+      table: sessionsTableHealth.table,
+      ok: sessionsTableHealth.ok,
+      error: sessionsTableHealth.error ?? null,
+    })
+  } catch (error) {
+    const normalized = normalizeError(error)
+    log('error', 'supabase-sessions:exception', { error: normalized })
+    sessionsTableHealth = {
+      ok: false,
+      mode: 'supabase',
+      table: process.env.SUPABASE_SESSIONS_TABLE?.trim() || '(missing)',
+      error: normalized.message ?? 'Sessions table health check failed',
+    }
+  }
 
   const openaiModel = process.env.OPENAI_MODEL?.trim()
   const openaiKey = process.env.OPENAI_API_KEY?.trim()
@@ -367,6 +388,19 @@ async function runHypotheses(): Promise<HypothesisResult[]> {
     status: supabaseBucket.ok ? 'ok' : 'error',
     detail: supabaseBucket.ok ? 'Bucket metadata query succeeded.' : `Bucket probe failed: ${supabaseBucket.error ?? 'unknown'}.`,
     suggestion: supabaseBucket.ok ? undefined : 'Verify bucket name and service role storage permissions.',
+  })
+
+  add({
+    id: 'supabase-sessions-table',
+    category: 'supabase',
+    label: 'Sessions table reachable',
+    status: sessionsTableHealth?.ok ? 'ok' : 'error',
+    detail: sessionsTableHealth?.ok
+      ? `Sessions table ${sessionsTableHealth.table} responded to a head query.`
+      : sessionsTableHealth?.error || 'Sessions table health check failed.',
+    suggestion: sessionsTableHealth?.ok
+      ? undefined
+      : 'Create the sessions table and set SUPABASE_SESSIONS_TABLE to its name; include id, email_to, status, duration_ms columns and allow service role access.',
   })
 
   add({

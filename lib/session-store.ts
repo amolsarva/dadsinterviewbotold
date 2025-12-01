@@ -20,21 +20,54 @@ export type SessionRecord = {
   turns?: SessionTurnRecord[]
 }
 
-export const SESSIONS_TABLE = process.env.SUPABASE_SESSIONS_TABLE ?? 'sessions'
+let cachedSessionsTable: string | null = null
+
+function resolveSessionsTableName(step: string): string {
+  const raw = process.env.SUPABASE_SESSIONS_TABLE
+  const table = typeof raw === 'string' ? raw.trim() : ''
+
+  if (!table) {
+    const message = 'SUPABASE_SESSIONS_TABLE must be set to the Supabase table that stores session metadata.'
+    log('error', 'env-missing', { message, name: 'SUPABASE_SESSIONS_TABLE', step })
+    throw new Error(message)
+  }
+
+  if (!cachedSessionsTable || cachedSessionsTable !== table) {
+    cachedSessionsTable = table
+  }
+
+  return table
+}
+
+export function sessionsTableName(step: string): string {
+  return resolveSessionsTableName(step)
+}
 
 function nowISO() {
   return new Date().toISOString()
 }
 
 function envSummary() {
+  const tableEnv = typeof process.env.SUPABASE_SESSIONS_TABLE === 'string' ? process.env.SUPABASE_SESSIONS_TABLE.trim() : ''
   return {
     NODE_ENV: process.env.NODE_ENV ?? 'unknown',
     SUPABASE_URL: process.env.SUPABASE_URL ? `${process.env.SUPABASE_URL.length} chars` : 'missing',
     SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY
       ? `${process.env.SUPABASE_SERVICE_ROLE_KEY.length} chars`
       : 'missing',
-    SUPABASE_SESSIONS_TABLE: process.env.SUPABASE_SESSIONS_TABLE ?? 'default (sessions)',
+    SUPABASE_SESSIONS_TABLE: tableEnv || '(missing)',
   }
+}
+
+function withSessionsTableHint(step: string, message: string) {
+  const table = cachedSessionsTable || '(unresolved)'
+  const hint =
+    'Set SUPABASE_SESSIONS_TABLE to the correct Supabase table and ensure it exists with id, email_to, status, and duration_ms columns.'
+  const schemaErrorPattern = /(schema cache|does not exist|missing relation)/i
+  if (schemaErrorPattern.test(message)) {
+    return `${message} | ${hint}`
+  }
+  return `${message} | Table: ${table} | Step: ${step} | ${hint}`
 }
 
 function log(level: 'log' | 'error', step: string, payload: Record<string, unknown> = {}) {
@@ -61,105 +94,114 @@ function assertEnv(name: string): string {
 let cachedClient: SupabaseClient | null = null
 
 export function getSupabaseSessionClient(): SupabaseClient {
+  const table = sessionsTableName('client:create')
   if (cachedClient) return cachedClient
 
   const url = assertEnv('SUPABASE_URL')
   const serviceKey = assertEnv('SUPABASE_SERVICE_ROLE_KEY')
 
   cachedClient = createClient(url, serviceKey)
-  log('log', 'client:created', { table: SESSIONS_TABLE })
+  log('log', 'client:created', { table })
   return cachedClient
 }
 
 export async function upsertSessionRecord(record: SessionRecord): Promise<SessionRecord> {
   const supabase = getSupabaseSessionClient()
-  log('log', 'upsert:start', { sessionId: record.id, table: SESSIONS_TABLE })
+  const table = sessionsTableName('upsert:start')
+  log('log', 'upsert:start', { sessionId: record.id, table })
 
   const { data, error } = await supabase
-    .from(SESSIONS_TABLE)
+    .from(table)
     .upsert(record)
     .select()
     .eq('id', record.id)
     .maybeSingle()
 
   if (error || !data) {
-    const message = error?.message || 'Supabase upsert failed without error payload.'
-    log('error', 'upsert:failure', { sessionId: record.id, table: SESSIONS_TABLE, error: message })
+    const message = withSessionsTableHint('upsert:failure', error?.message || 'Supabase upsert failed without error payload.')
+    log('error', 'upsert:failure', { sessionId: record.id, table, error: message })
     throw new Error(message)
   }
 
-  log('log', 'upsert:success', { sessionId: data.id, table: SESSIONS_TABLE })
+  log('log', 'upsert:success', { sessionId: data.id, table })
   return data as SessionRecord
 }
 
 export async function fetchSessionRecord(id: string): Promise<SessionRecord | null> {
   const supabase = getSupabaseSessionClient()
-  log('log', 'fetch:start', { sessionId: id, table: SESSIONS_TABLE })
+  const table = sessionsTableName('fetch:start')
+  log('log', 'fetch:start', { sessionId: id, table })
 
   const { data, error } = await supabase
-    .from(SESSIONS_TABLE)
+    .from(table)
     .select('*')
     .eq('id', id)
     .maybeSingle()
 
   if (error) {
-    log('error', 'fetch:failure', { sessionId: id, table: SESSIONS_TABLE, error: error.message })
-    throw new Error(error.message)
+    const message = withSessionsTableHint('fetch:failure', error.message)
+    log('error', 'fetch:failure', { sessionId: id, table, error: message })
+    throw new Error(message)
   }
 
   if (!data) {
-    log('log', 'fetch:missing', { sessionId: id, table: SESSIONS_TABLE })
+    log('log', 'fetch:missing', { sessionId: id, table })
     return null
   }
 
-  log('log', 'fetch:success', { sessionId: data.id, table: SESSIONS_TABLE })
+  log('log', 'fetch:success', { sessionId: data.id, table })
   return data as SessionRecord
 }
 
 export async function fetchAllSessions(): Promise<SessionRecord[]> {
   const supabase = getSupabaseSessionClient()
-  log('log', 'list:start', { table: SESSIONS_TABLE })
+  const table = sessionsTableName('list:start')
+  log('log', 'list:start', { table })
 
   const { data, error } = await supabase
-    .from(SESSIONS_TABLE)
+    .from(table)
     .select('*')
     .order('created_at', { ascending: true })
 
   if (error) {
-    log('error', 'list:failure', { table: SESSIONS_TABLE, error: error.message })
-    throw new Error(error.message)
+    const message = withSessionsTableHint('list:failure', error.message)
+    log('error', 'list:failure', { table, error: message })
+    throw new Error(message)
   }
 
   const sessions = (data as SessionRecord[]) || []
-  log('log', 'list:success', { table: SESSIONS_TABLE, count: sessions.length })
+  log('log', 'list:success', { table, count: sessions.length })
   return sessions
 }
 
 export async function deleteSessionRecord(id: string): Promise<void> {
   const supabase = getSupabaseSessionClient()
-  log('log', 'delete:start', { sessionId: id, table: SESSIONS_TABLE })
+  const table = sessionsTableName('delete:start')
+  log('log', 'delete:start', { sessionId: id, table })
 
-  const { error } = await supabase.from(SESSIONS_TABLE).delete().eq('id', id)
+  const { error } = await supabase.from(table).delete().eq('id', id)
   if (error) {
-    log('error', 'delete:failure', { sessionId: id, table: SESSIONS_TABLE, error: error.message })
-    throw new Error(error.message)
+    const message = withSessionsTableHint('delete:failure', error.message)
+    log('error', 'delete:failure', { sessionId: id, table, error: message })
+    throw new Error(message)
   }
 
-  log('log', 'delete:success', { sessionId: id, table: SESSIONS_TABLE })
+  log('log', 'delete:success', { sessionId: id, table })
 }
 
 export async function sessionDbHealth() {
   const supabase = getSupabaseSessionClient()
-  log('log', 'health:start', { table: SESSIONS_TABLE })
+  const table = sessionsTableName('health:start')
+  log('log', 'health:start', { table })
 
-  const { error } = await supabase.from(SESSIONS_TABLE).select('id', { head: true }).limit(1)
+  const { error } = await supabase.from(table).select('id', { head: true }).limit(1)
 
   if (error) {
-    const message = `Supabase sessions table unavailable: ${error.message}`
-    log('error', 'health:failure', { table: SESSIONS_TABLE, error: message })
-    return { ok: false, mode: 'supabase', table: SESSIONS_TABLE, error: message }
+    const message = withSessionsTableHint('health:failure', `Supabase sessions table unavailable: ${error.message}`)
+    log('error', 'health:failure', { table, error: message })
+    return { ok: false, mode: 'supabase', table, error: message }
   }
 
-  log('log', 'health:success', { table: SESSIONS_TABLE })
-  return { ok: true, mode: 'supabase', table: SESSIONS_TABLE }
+  log('log', 'health:success', { table })
+  return { ok: true, mode: 'supabase', table }
 }
