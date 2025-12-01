@@ -86,7 +86,7 @@ export async function POST(request: NextRequest) {
       url: url || null,
     })
 
-    mergeSessionArtifacts(sessionId, {
+    await mergeSessionArtifacts(sessionId, {
       artifacts: { session_audio: url },
       durationMs: typeof duration_ms === 'number' ? duration_ms : undefined,
     })

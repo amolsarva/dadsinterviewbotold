@@ -1,31 +1,25 @@
 import { putBlobFromBuffer, listBlobs, deleteBlobsByPrefix, deleteBlob } from './blob'
-import { getSupabaseBucket, logBlobDiagnostic } from '@/utils/blob-env'
+import { logBlobDiagnostic } from '@/utils/blob-env'
 import { sendSummaryEmail } from './email'
 import { flagFox } from './foxes'
 import { generateSessionTitle, SummarizableTurn } from './session-title'
 import { formatSessionTitleFallback } from './fallback-texts'
 import { normalizeHandle } from './user-scope'
 import { resolveDefaultNotifyEmailServer } from './default-notify-email.server'
+import {
+  deleteSessionRecord,
+  fetchAllSessions,
+  fetchSessionRecord,
+  SESSIONS_TABLE,
+  SessionRecord,
+  SessionTurnRecord,
+  sessionDbHealth,
+  upsertSessionRecord,
+} from './session-store'
 
-export type Session = {
-  id: string
-  created_at: string
-  title?: string
-  email_to: string
-  user_handle?: string | null
-  status: 'in_progress' | 'completed' | 'emailed' | 'error'
-  duration_ms: number
-  total_turns: number
-  artifacts?: Record<string, string>
-  turns?: Turn[]
-}
+export type Session = SessionRecord
 
-export type Turn = {
-  id: string
-  role: 'user' | 'assistant'
-  text: string
-  audio_blob_url?: string
-}
+export type Turn = SessionTurnRecord
 
 type SessionPatch = {
   artifacts?: Record<string, string | null | undefined>
@@ -394,102 +388,37 @@ async function ensurePrimerLoadedFromStorage(handle?: string | null) {
   }
 }
 
-async function hydrateSessionsFromBlobs() {
+function coerceSessionRecord(record: SessionRecord): RememberedSession {
+  return {
+    ...record,
+    user_handle: record.user_handle ?? null,
+    artifacts: record.artifacts ?? {},
+    turns: Array.isArray(record.turns) ? [...record.turns] : [],
+  }
+}
+
+async function hydrateSessionsFromDatabase() {
   const timestamp = diagnosticTimestamp()
-  const env = diagnosticEnvSummary()
+  const env = { ...diagnosticEnvSummary(), sessionsTable: SESSIONS_TABLE }
   logDiagnostic('log', 'session:hydrate:start', { env })
   hydrationDiagnostics.lastAttemptedAt = timestamp
 
   try {
-    const { blobs } = await listBlobs({ prefix: 'sessions/', limit: 2000 }).catch((error) => {
-      const diagnosticPayload = { env, error: describeError(error) }
-      logDiagnostic('error', 'session:hydrate:list-failed', diagnosticPayload)
-      const err = new Error(
-        `[diagnostic] ${timestamp} failed to list session manifests; hydration aborted. Inspect diagnostics for blob service errors.`,
-      )
-      ;(err as any).diagnostic = diagnosticPayload
-      throw err
-    })
-
-    const manifests = blobs.filter((b) => /session-.+\.json$/.test(b.pathname))
-    let loadedCount = 0
-
-    logDiagnostic('log', 'session:hydrate:list-success', {
-      env,
-      totalBlobs: blobs.length,
-      manifestCount: manifests.length,
-    })
-
-    for (const manifest of manifests) {
-      try {
-        const url = manifest.downloadUrl || manifest.url
-        const resp = await fetch(url)
-        if (!resp.ok) {
-          logDiagnostic('error', 'session:hydrate:manifest-fetch-failed', {
-            env,
-            manifestPath: manifest.pathname,
-            status: resp.status,
-            statusText: resp.statusText,
-          })
-          continue
-        }
-        const data = await resp.json()
-        const fallbackId = manifest.pathname.replace(/^sessions\//, '').split('/')[0] || data?.sessionId
-        const uploadedAt =
-          manifest.uploadedAt instanceof Date
-            ? manifest.uploadedAt.toISOString()
-            : typeof manifest.uploadedAt === 'string'
-            ? manifest.uploadedAt
-            : undefined
-        const storedId = rememberSessionManifest(data, fallbackId, uploadedAt, url)
-        if (storedId) {
-          loadedCount += 1
-          continue
-        }
-        if (fallbackId && mem.sessions.has(fallbackId)) {
-          loadedCount += 1
-          continue
-        }
-        const derived = buildSessionFromManifest(data, fallbackId, uploadedAt)
-        if (derived) {
-          mem.sessions.set(derived.id, { ...derived, turns: derived.turns ? [...derived.turns] : [] })
-          loadedCount += 1
-        }
-      } catch (err) {
-        logDiagnostic('error', 'session:hydrate:manifest-parse-failed', {
-          env,
-          manifestPath: manifest.pathname,
-          error: describeError(err),
-        })
-      }
+    const sessions = await fetchAllSessions()
+    mem.sessions.clear()
+    for (const record of sessions) {
+      const normalized = coerceSessionRecord(record)
+      mem.sessions.set(normalized.id, normalized)
     }
 
-    if (manifests.length > 0 && loadedCount === 0) {
-      const diagnosticPayload = {
-        env,
-        totalBlobs: blobs.length,
-        manifestCount: manifests.length,
-        loadedCount,
-      }
-      logDiagnostic('error', 'session:hydrate:empty', diagnosticPayload)
-      const err = new Error(
-        `[diagnostic] ${timestamp} session hydration found manifests but loaded zero sessions. Preventing empty memory usage; see diagnostics for blob details.`,
-      )
-      ;(err as any).diagnostic = diagnosticPayload
-      hydrationState.hydrated = false
-      throw err
-    }
+    hydrationState.hydrated = true
+    hydrationDiagnostics.lastHydratedAt = timestamp
 
-    hydrationState.hydrated = loadedCount > 0
-    if (hydrationState.hydrated) {
-      hydrationDiagnostics.lastHydratedAt = timestamp
-    }
     logDiagnostic('log', 'session:hydrate:complete', {
       env,
-      totalBlobs: blobs.length,
-      manifestCount: manifests.length,
-      loadedCount,
       hydrated: hydrationState.hydrated,
+      loadedCount: sessions.length,
+      sessionCount: mem.sessions.size,
     })
   } catch (err) {
     const described = describeError(err)
@@ -508,6 +437,7 @@ async function hydrateSessionsFromBlobs() {
       hydrated: hydrationState.hydrated,
       sessionCount: mem.sessions.size,
       errors: hydrationDiagnostics.errors,
+      table: SESSIONS_TABLE,
     })
   }
 }
@@ -530,7 +460,7 @@ export async function ensureSessionMemoryHydrated() {
   if (hydrationState.hydrated) return
   if (!hydrationPromise) {
     hydrationPromise = (async () => {
-      await hydrateSessionsFromBlobs()
+      await hydrateSessionsFromDatabase()
     })()
   }
   try {
@@ -699,7 +629,7 @@ export async function rebuildMemoryPrimer(
 }
 
 export async function dbHealth() {
-  return { ok: true, mode: 'memory' }
+  return sessionDbHealth()
 }
 
 export async function createSession({
@@ -723,25 +653,24 @@ export async function createSession({
     turns: [],
     artifacts: {},
   }
-  mem.sessions.set(s.id, s)
-  if (mem.sessions.size === 1) {
-    flagFox({
-      id: 'theory-1-memory-warmed',
-      theory: 1,
-      level: 'info',
-      message: 'In-memory session store warmed with first session.',
-      details: { bootedAt: memBootedAt, sessionId: s.id },
-    })
-  }
+
+  logDiagnostic('log', 'session:create:supabase:start', {
+    sessionId: s.id,
+    env: { ...diagnosticEnvSummary(), sessionsTable: SESSIONS_TABLE },
+  })
+  const persisted = await upsertSessionRecord(s)
+  const normalized = coerceSessionRecord(persisted)
+  mem.sessions.set(normalized.id, normalized)
+
   try {
-    await persistSessionSnapshot(s)
+    await persistSessionSnapshot(normalized)
   } catch (err) {
     logDiagnostic('error', 'session:persist:initial:failure', {
-      sessionId: s.id,
+      sessionId: normalized.id,
       error: describeError(err),
     })
   }
-  return s
+  return normalized
 }
 
 function buildSessionManifestPayload(session: RememberedSession) {
@@ -827,6 +756,7 @@ async function persistSessionSnapshot(session: RememberedSession) {
 }
 
 export async function appendTurn(id: string, turn: Partial<Turn>) {
+  const timestamp = diagnosticTimestamp()
   let s = mem.sessions.get(id)
   if (!s) {
     await requireHydration('appendTurn')
@@ -874,6 +804,22 @@ export async function appendTurn(id: string, turn: Partial<Turn>) {
     turns: nextTurns,
     total_turns: nextTurns.length,
   }
+  try {
+    await upsertSessionRecord(snapshot)
+  } catch (err) {
+    const diagnosticPayload = {
+      sessionId: id,
+      env: { ...diagnosticEnvSummary(), sessionsTable: SESSIONS_TABLE },
+      error: describeError(err),
+      step: 'appendTurn.supabase',
+    }
+    logDiagnostic('error', 'session:append:error', diagnosticPayload)
+    const error = new Error(
+      `[diagnostic] ${timestamp} session turn persistence failed for session ${id}; inspect Supabase configuration.`,
+    )
+    ;(error as any).diagnostic = diagnosticPayload
+    throw error
+  }
   let manifestUrl: string | undefined
   try {
     manifestUrl = await persistSessionSnapshot(snapshot)
@@ -896,6 +842,7 @@ export async function appendTurn(id: string, turn: Partial<Turn>) {
       manifest: manifestUrl,
     }
   }
+  mem.sessions.set(snapshot.id, snapshot)
   return t
 }
 
@@ -913,6 +860,7 @@ export async function finalizeSession(
   id: string,
   body: { clientDurationMs: number; sessionAudioUrl?: string | null },
 ): Promise<FinalizeSessionResult> {
+  const timestamp = diagnosticTimestamp()
   await requireHydration('finalizeSession')
   const s = mem.sessions.get(id)
   if (!s) {
@@ -1046,6 +994,23 @@ export async function finalizeSession(
     })
   }
 
+  try {
+    await upsertSessionRecord(s)
+  } catch (err) {
+    const diagnosticPayload = {
+      sessionId: s.id,
+      env: { ...diagnosticEnvSummary(), sessionsTable: SESSIONS_TABLE },
+      error: describeError(err),
+      step: 'finalizeSession.supabase',
+    }
+    logDiagnostic('error', 'session:finalize:error', diagnosticPayload)
+    const error = new Error(
+      `[diagnostic] ${timestamp} session finalize persistence failed for ${s.id}; validate Supabase sessions table access.`,
+    )
+    ;(error as any).diagnostic = diagnosticPayload
+    throw error
+  }
+
   mem.sessions.set(id, s)
 
   await rebuildMemoryPrimer(s.user_handle ?? null).catch((err) => {
@@ -1059,7 +1024,7 @@ export async function finalizeSession(
   return { ok: true, session: s, emailed, emailStatus }
 }
 
-export function mergeSessionArtifacts(id: string, patch: SessionPatch) {
+export async function mergeSessionArtifacts(id: string, patch: SessionPatch) {
   const session = mem.sessions.get(id)
   if (!session) return
   if (patch.artifacts) {
@@ -1078,6 +1043,16 @@ export function mergeSessionArtifacts(id: string, patch: SessionPatch) {
   }
   if (patch.status) {
     session.status = patch.status
+  }
+  try {
+    await upsertSessionRecord(session)
+  } catch (err) {
+    logDiagnostic('error', 'session:merge:failure', {
+      sessionId: id,
+      env: { ...diagnosticEnvSummary(), sessionsTable: SESSIONS_TABLE },
+      error: describeError(err),
+    })
+    throw err
   }
   mem.sessions.set(id, session)
 }
@@ -1138,6 +1113,17 @@ export async function deleteSession(
 
   const deletedHandle = session?.user_handle ?? null
   const deletedHandleKey = primerKeyForHandle(deletedHandle)
+
+  try {
+    await deleteSessionRecord(id)
+  } catch (err) {
+    logDiagnostic('error', 'session:delete:supabase-failure', {
+      id,
+      env: { ...diagnosticEnvSummary(), sessionsTable: SESSIONS_TABLE },
+      error: describeError(err),
+    })
+    throw err
+  }
 
   if (session) {
     mem.sessions.delete(session.id)
@@ -1202,7 +1188,23 @@ export async function deleteSession(
 export async function clearAllSessions(): Promise<{ ok: boolean }> {
   await requireHydration('clearAllSessions')
 
+  const supabaseSessions = await fetchAllSessions()
+
   mem.sessions.clear()
+
+  await Promise.all(
+    supabaseSessions.map(async (record) => {
+      try {
+        await deleteSessionRecord(record.id)
+      } catch (err) {
+        logDiagnostic('error', 'session:clear-all:supabase-failure', {
+          sessionId: record.id,
+          env: { ...diagnosticEnvSummary(), sessionsTable: SESSIONS_TABLE },
+          error: describeError(err),
+        })
+      }
+    }),
+  )
 
   const prefixes = ['sessions/', 'transcripts/', `${MEMORY_PRIMER_PREFIX}/`]
   await Promise.all(
@@ -1371,15 +1373,13 @@ export function getSessionMemorySnapshot(
 
 export async function getSession(id: string): Promise<Session | undefined> {
   const inMemory = mem.sessions.get(id)
-  if (inMemory) return inMemory
+  if (inMemory) return { ...inMemory, turns: inMemory.turns ? [...inMemory.turns] : [] }
 
-  const manifest = await fetchSessionManifest(id)
-  if (manifest) {
-    const storedId = rememberSessionManifest(manifest.data, manifest.id, manifest.uploadedAt, manifest.url)
-    const stored = storedId ? mem.sessions.get(storedId) : mem.sessions.get(manifest.id)
-    if (stored) return stored
-    const derived = buildSessionFromManifest(manifest.data, manifest.id, manifest.uploadedAt)
-    if (derived) return derived
+  const record = await fetchSessionRecord(id)
+  if (record) {
+    const normalized = coerceSessionRecord(record)
+    mem.sessions.set(normalized.id, normalized)
+    return normalized
   }
 
   return undefined
@@ -1454,6 +1454,13 @@ export function rememberSessionManifest(
       manifest: manifestUrl,
     }
   }
+  upsertSessionRecord(derived).catch((err) =>
+    logDiagnostic('error', 'session:remember:supabase-failure', {
+      sessionId: derived.id,
+      env: { ...diagnosticEnvSummary(), sessionsTable: SESSIONS_TABLE },
+      error: describeError(err),
+    }),
+  )
   mem.sessions.set(derived.id, {
     ...derived,
     turns: derived.turns ? [...derived.turns] : [],
