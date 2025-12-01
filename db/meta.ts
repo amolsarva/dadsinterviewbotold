@@ -69,7 +69,7 @@ export function describeDatabaseMetaEnv() {
     ...describeSupabaseEnvSnapshot(snapshot),
     SUPABASE_TURNS_TABLE: process.env.SUPABASE_TURNS_TABLE?.trim() || null,
     NEXT_PUBLIC_SUPABASE_TURNS_TABLE: process.env.NEXT_PUBLIC_SUPABASE_TURNS_TABLE?.trim() || null,
-    SUPABASE_SESSIONS_TABLE: process.env.SUPABASE_SESSIONS_TABLE?.trim() || 'sessions',
+    SUPABASE_SESSIONS_TABLE: process.env.SUPABASE_SESSIONS_TABLE?.trim() || null,
   }
   logBlobDiagnostic('log', 'db-meta:env', details)
   return details

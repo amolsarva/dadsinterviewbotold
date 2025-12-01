@@ -20,21 +20,45 @@ export type SessionRecord = {
   turns?: SessionTurnRecord[]
 }
 
-export const SESSIONS_TABLE = process.env.SUPABASE_SESSIONS_TABLE ?? 'sessions'
+function resolveSessionsTableName(): string {
+  const raw = process.env.SUPABASE_SESSIONS_TABLE
+  const table = typeof raw === 'string' ? raw.trim() : ''
+
+  if (!table) {
+    const message = 'SUPABASE_SESSIONS_TABLE must be set to the Supabase table that stores session metadata.'
+    log('error', 'env-missing', { message, name: 'SUPABASE_SESSIONS_TABLE' })
+    throw new Error(message)
+  }
+
+  return table
+}
+
+export const SESSIONS_TABLE = resolveSessionsTableName()
 
 function nowISO() {
   return new Date().toISOString()
 }
 
 function envSummary() {
+  const tableEnv = typeof process.env.SUPABASE_SESSIONS_TABLE === 'string' ? process.env.SUPABASE_SESSIONS_TABLE.trim() : ''
   return {
     NODE_ENV: process.env.NODE_ENV ?? 'unknown',
     SUPABASE_URL: process.env.SUPABASE_URL ? `${process.env.SUPABASE_URL.length} chars` : 'missing',
     SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY
       ? `${process.env.SUPABASE_SERVICE_ROLE_KEY.length} chars`
       : 'missing',
-    SUPABASE_SESSIONS_TABLE: process.env.SUPABASE_SESSIONS_TABLE ?? 'default (sessions)',
+    SUPABASE_SESSIONS_TABLE: tableEnv || '(missing)',
   }
+}
+
+function withSessionsTableHint(message: string) {
+  const hint =
+    'Set SUPABASE_SESSIONS_TABLE to the correct Supabase table and ensure it exists with id, email_to, status, and duration_ms columns.'
+  const schemaErrorPattern = /(schema cache|does not exist|missing relation)/i
+  if (schemaErrorPattern.test(message)) {
+    return `${message} | ${hint}`
+  }
+  return `${message} | Table: ${SESSIONS_TABLE} | ${hint}`
 }
 
 function log(level: 'log' | 'error', step: string, payload: Record<string, unknown> = {}) {
@@ -83,7 +107,7 @@ export async function upsertSessionRecord(record: SessionRecord): Promise<Sessio
     .maybeSingle()
 
   if (error || !data) {
-    const message = error?.message || 'Supabase upsert failed without error payload.'
+    const message = withSessionsTableHint(error?.message || 'Supabase upsert failed without error payload.')
     log('error', 'upsert:failure', { sessionId: record.id, table: SESSIONS_TABLE, error: message })
     throw new Error(message)
   }
@@ -103,8 +127,9 @@ export async function fetchSessionRecord(id: string): Promise<SessionRecord | nu
     .maybeSingle()
 
   if (error) {
-    log('error', 'fetch:failure', { sessionId: id, table: SESSIONS_TABLE, error: error.message })
-    throw new Error(error.message)
+    const message = withSessionsTableHint(error.message)
+    log('error', 'fetch:failure', { sessionId: id, table: SESSIONS_TABLE, error: message })
+    throw new Error(message)
   }
 
   if (!data) {
@@ -126,8 +151,9 @@ export async function fetchAllSessions(): Promise<SessionRecord[]> {
     .order('created_at', { ascending: true })
 
   if (error) {
-    log('error', 'list:failure', { table: SESSIONS_TABLE, error: error.message })
-    throw new Error(error.message)
+    const message = withSessionsTableHint(error.message)
+    log('error', 'list:failure', { table: SESSIONS_TABLE, error: message })
+    throw new Error(message)
   }
 
   const sessions = (data as SessionRecord[]) || []
@@ -141,8 +167,9 @@ export async function deleteSessionRecord(id: string): Promise<void> {
 
   const { error } = await supabase.from(SESSIONS_TABLE).delete().eq('id', id)
   if (error) {
-    log('error', 'delete:failure', { sessionId: id, table: SESSIONS_TABLE, error: error.message })
-    throw new Error(error.message)
+    const message = withSessionsTableHint(error.message)
+    log('error', 'delete:failure', { sessionId: id, table: SESSIONS_TABLE, error: message })
+    throw new Error(message)
   }
 
   log('log', 'delete:success', { sessionId: id, table: SESSIONS_TABLE })
@@ -155,7 +182,7 @@ export async function sessionDbHealth() {
   const { error } = await supabase.from(SESSIONS_TABLE).select('id', { head: true }).limit(1)
 
   if (error) {
-    const message = `Supabase sessions table unavailable: ${error.message}`
+    const message = withSessionsTableHint(`Supabase sessions table unavailable: ${error.message}`)
     log('error', 'health:failure', { table: SESSIONS_TABLE, error: message })
     return { ok: false, mode: 'supabase', table: SESSIONS_TABLE, error: message }
   }
