@@ -1901,8 +1901,7 @@ export default function DiagnosticsPage() {
         <div className="diagnostics-debug-panel">
           <h3>Debug utilities</h3>
           <p className="status-note">
-            These controls mirror the dedicated Debug page so you can validate blob storage and cleanup flows without
-            leaving the diagnostics workspace.
+            Use these controls to validate blob storage and cleanup flows without leaving the diagnostics workspace.
           </p>
           <DebugPanel />
         </div>
