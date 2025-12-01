@@ -6,6 +6,7 @@ import { DebugPanel } from '../debug/debug-panel'
 
 type TestKey =
   | 'health'
+  | 'session'
   | 'storage'
   | 'google'
   | 'openai'
@@ -76,6 +77,7 @@ type BlobFlowStep = {
   durationMs?: number
   message?: string
   note?: string
+  hint?: string
   error?: string
   responseSnippet?: string
 }
@@ -195,6 +197,7 @@ const PROVIDER_ERROR_STORAGE_KEY = 'diagnostics:lastProviderError'
 
 const TEST_CONFIG: Record<TestKey, { label: string; path: string; method: 'GET' | 'POST' }> = {
   health: { label: 'Health check', path: '/api/health', method: 'GET' },
+  session: { label: 'Session + turns table drill', path: '/api/diagnostics/session', method: 'POST' },
   storage: { label: 'Storage check', path: '/api/diagnostics/storage', method: 'GET' },
   google: { label: 'Google AI API check', path: '/api/diagnostics/google', method: 'GET' },
   openai: { label: 'OpenAI API check', path: '/api/diagnostics/openai', method: 'GET' },
@@ -204,11 +207,22 @@ const TEST_CONFIG: Record<TestKey, { label: string; path: string; method: 'GET' 
   email: { label: 'Email test', path: '/api/diagnostics/email', method: 'POST' },
 }
 
-const TEST_ORDER: TestKey[] = ['health', 'storage', 'google', 'openai', 'smoke', 'turn', 'e2e', 'email']
+const TEST_ORDER: TestKey[] = [
+  'health',
+  'session',
+  'storage',
+  'google',
+  'openai',
+  'smoke',
+  'turn',
+  'e2e',
+  'email',
+]
 
 function initialResults(): Record<TestKey, TestResult> {
   return {
     health: { status: 'idle' },
+    session: { status: 'idle' },
     storage: { status: 'idle' },
     google: { status: 'idle' },
     openai: { status: 'idle' },
@@ -489,6 +503,34 @@ function formatSummary(key: TestKey, data: any): string {
     return parts.join(' · ')
   }
 
+  if (key === 'session') {
+    const steps: BlobFlowStep[] = Array.isArray(data?.steps) ? data.steps : []
+    const failing = steps.find((step) => step.ok === false)
+    const stepSummary = steps.length
+      ? steps
+          .map((step) => {
+            const status = typeof step.status === 'number' ? ` HTTP ${step.status}` : ''
+            return `${step.ok ? '✅' : '❌'} ${step.label || step.id || 'step'}${status}`
+          })
+          .join(' · ')
+      : null
+
+    if (failing) {
+      const hint = failing.hint ? ` Hint: ${failing.hint}` : ''
+      return `Session drill failed at ${failing.label || failing.id}: ${failing.detail || 'unknown error'}.${hint}`
+    }
+
+    const message = typeof data?.message === 'string' ? data.message : null
+    const tableLabel = data?.table ? `Table ${data.table}` : 'table unknown'
+    const sessionLabel = data?.sessionId ? `Session ${data.sessionId}` : 'session id unknown'
+
+    if (stepSummary) {
+      return `${message || 'Session drill executed.'} · ${tableLabel} · ${sessionLabel} · Steps: ${stepSummary}`
+    }
+
+    return `${message || 'Session drill executed.'} · ${tableLabel} · ${sessionLabel}`
+  }
+
   if (key === 'storage') {
     const diagnostics = data?.env?.diagnostics
     const detailParts: string[] = []
@@ -739,6 +781,7 @@ function buildDefaultRemediation(
     google: 'Verify GOOGLE_API_KEY/GOOGLE_MODEL and confirm access is enabled.',
     email: 'Check SENDGRID_API_KEY or RESEND_API_KEY and DEFAULT_NOTIFY_EMAIL.',
     smoke: 'Inspect server logs; ensure dependent services are reachable.',
+    session: 'Confirm Supabase URL/service key and SUPABASE_TURNS_TABLE are correct; run session drill again.',
     turn: 'Confirm /api/save-turn prerequisites (Supabase URL, service role key, turns table, and blob config).',
     e2e: 'Run storage and provider checks; fix failures above first.',
     health: 'Review storage/db details in the health payload.',

@@ -17,6 +17,12 @@ const ENDPOINTS: EndpointSummary[] = [
     description: 'Overall service health, storage configuration, and email defaults.',
   },
   {
+    key: 'session',
+    method: 'POST',
+    path: '/api/diagnostics/session',
+    description: 'Validates session IDs and Supabase turn inserts end-to-end.',
+  },
+  {
     key: 'env',
     method: 'GET',
     path: '/api/diagnostics/env',
