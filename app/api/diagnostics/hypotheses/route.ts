@@ -12,7 +12,7 @@ type HypothesisResult = {
   id: string
   category: HypothesisCategory
   label: string
-  status: 'ok' | 'warn' | 'error'
+  status: 'ok' | 'warn' | 'error' | 'info'
   detail: string
   evidence?: Record<string, unknown>
   suggestion?: string
