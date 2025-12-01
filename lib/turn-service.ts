@@ -2,7 +2,7 @@
 
 import { putBlobFromBuffer } from './blob'
 import { getConversationTurnsTable } from '@/db/meta'
-import { getSupabaseClient, logBlobDiagnostic } from '@/utils/blob-env'
+import { describeSupabaseEnvSnapshot, getSupabaseClient, logBlobDiagnostic, snapshotSupabaseEnv } from '@/utils/blob-env'
 import { type ConversationTurnInsert, type ConversationTurnRow } from '@/types/turns'
 
 type DiagnosticLevel = 'log' | 'error'
@@ -42,9 +42,21 @@ type SaveTurnResult = ConversationTurnRow
 const nowISO = () => new Date().toISOString()
 
 function logTurnDiagnostic(level: DiagnosticLevel, step: string, payload?: Record<string, unknown>) {
-  const entry = { ...(payload ?? {}) }
-  const message = `[diagnostic] ${nowISO()} ${step} ${JSON.stringify(entry)}`
+  const env = describeSupabaseEnvSnapshot(snapshotSupabaseEnv())
+  const table = getCachedTableName()
+  const entry = { env, table, ...(payload ?? {}) }
+  const message = `[diagnostic] ${nowISO()} turn-service:${step} ${JSON.stringify(entry)}`
   level === 'error' ? console.error(message) : console.log(message)
+}
+
+function getCachedTableName() {
+  try {
+    return getConversationTurnsTable()
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'unknown turns table error'
+    console.error(`[diagnostic] ${nowISO()} turn-service:table-resolve-error ${JSON.stringify({ error: message })}`)
+    throw error
+  }
 }
 
 /**
@@ -56,7 +68,7 @@ function logTurnDiagnostic(level: DiagnosticLevel, step: string, payload?: Recor
  * which is guaranteed not to trigger Supabase schema validation errors.
  */
 export async function assertTurnsTableConfigured(): Promise<string> {
-  const table = await getConversationTurnsTable()
+  const table = getCachedTableName()
   const client = getSupabaseClient()
 
   const { error } = await client.from(table).select('id').limit(1)
