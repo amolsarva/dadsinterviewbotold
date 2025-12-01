@@ -24,11 +24,13 @@ This project will fail fast when Supabase is misconfigured. Use this list to mak
    - Table must include columns: `session_id`, `turn`, `transcript` (code expects these for discovery).
    - Additional columns used by inserts: `assistant_reply`, `provider`, `manifest_url`, `user_audio_url`, `assistant_audio_url`, `duration_ms`, `assistant_duration_ms`.
    - If you provide `SUPABASE_TURNS_TABLE`, it must point to a table with the above columns; otherwise requests will fail early with a clear error.
+   - Use `docs/supabase-schema.sql` in the Supabase SQL editor to create or align the `conversation_turns` table and its indexes.
 
 3. **Sessions table shape**
    - Table must include at least `id`, `created_at`, `email_to`, `status`, and `duration_ms` columns; optional columns include `user_handle`, `title`, `artifacts`, and `total_turns`.
    - `SUPABASE_SESSIONS_TABLE` must be set to this table name explicitly; diagnostics will fail fast if it is missing or misnamed.
    - Grant the service role read/write access so health checks and upserts do not return "Could not find the table public.<name>" errors.
+   - Run the statements in `docs/supabase-schema.sql` to create the `sessions` table or patch an existing one with the expected defaults and status constraint.
 
 4. **RLS / policies**
    - Database and storage operations rely on the service role; ensure the key is active and not restricted.
