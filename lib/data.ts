@@ -10,7 +10,7 @@ import {
   deleteSessionRecord,
   fetchAllSessions,
   fetchSessionRecord,
-  SESSIONS_TABLE,
+  sessionsTableName,
   SessionRecord,
   SessionTurnRecord,
   sessionDbHealth,
@@ -64,6 +64,10 @@ const hydrationDiagnostics: {
   lastAttemptedAt: string | null
   lastHydratedAt: string | null
 } = g[hydrationDiagnosticsKey]
+
+function currentSessionsTable(step: string) {
+  return sessionsTableName(`data:${step}`)
+}
 
 const MEMORY_PRIMER_PREFIX = 'memory/primers'
 const LEGACY_MEMORY_PRIMER_PATH = 'memory/MemoryPrimer.txt'
@@ -399,7 +403,8 @@ function coerceSessionRecord(record: SessionRecord): RememberedSession {
 
 async function hydrateSessionsFromDatabase() {
   const timestamp = diagnosticTimestamp()
-  const env = { ...diagnosticEnvSummary(), sessionsTable: SESSIONS_TABLE }
+  const table = currentSessionsTable('session:hydrate')
+  const env = { ...diagnosticEnvSummary(), sessionsTable: table }
   logDiagnostic('log', 'session:hydrate:start', { env })
   hydrationDiagnostics.lastAttemptedAt = timestamp
 
@@ -437,7 +442,7 @@ async function hydrateSessionsFromDatabase() {
       hydrated: hydrationState.hydrated,
       sessionCount: mem.sessions.size,
       errors: hydrationDiagnostics.errors,
-      table: SESSIONS_TABLE,
+      table,
     })
   }
 }
@@ -656,7 +661,7 @@ export async function createSession({
 
   logDiagnostic('log', 'session:create:supabase:start', {
     sessionId: s.id,
-    env: { ...diagnosticEnvSummary(), sessionsTable: SESSIONS_TABLE },
+    env: { ...diagnosticEnvSummary(), sessionsTable: currentSessionsTable('session:create') },
   })
   const persisted = await upsertSessionRecord(s)
   const normalized = coerceSessionRecord(persisted)
@@ -780,7 +785,7 @@ async function attemptSessionRecovery(sessionId: string): Promise<RememberedSess
   logDiagnostic('error', 'session:append:missing-session', {
     sessionId,
     fallbackEmail: fallbackEmail ? 'resolved_default' : 'empty',
-    env: { ...diagnosticEnvSummary(), sessionsTable: SESSIONS_TABLE },
+    env: { ...diagnosticEnvSummary(), sessionsTable: currentSessionsTable('session:append:missing') },
     memBootedAt,
     memSessions: mem.sessions.size,
     timestamp,
@@ -794,14 +799,14 @@ async function attemptSessionRecovery(sessionId: string): Promise<RememberedSess
     logDiagnostic('log', 'session:append:recovered', {
       sessionId,
       fallbackEmail: fallbackEmail ? 'resolved_default' : 'empty',
-      env: { ...diagnosticEnvSummary(), sessionsTable: SESSIONS_TABLE },
+      env: { ...diagnosticEnvSummary(), sessionsTable: currentSessionsTable('session:append:recovered') },
       timestamp,
     })
     return recovered
   } catch (err) {
     logDiagnostic('error', 'session:append:recovery-failed', {
       sessionId,
-      env: { ...diagnosticEnvSummary(), sessionsTable: SESSIONS_TABLE },
+      env: { ...diagnosticEnvSummary(), sessionsTable: currentSessionsTable('session:append:recovery-failed') },
       error: describeError(err),
       timestamp,
     })
@@ -873,7 +878,7 @@ export async function appendTurn(id: string, turn: Partial<Turn>) {
   } catch (err) {
     const diagnosticPayload = {
       sessionId: id,
-      env: { ...diagnosticEnvSummary(), sessionsTable: SESSIONS_TABLE },
+      env: { ...diagnosticEnvSummary(), sessionsTable: currentSessionsTable('session:append:supabase') },
       error: describeError(err),
       step: 'appendTurn.supabase',
     }
@@ -1063,7 +1068,7 @@ export async function finalizeSession(
   } catch (err) {
     const diagnosticPayload = {
       sessionId: s.id,
-      env: { ...diagnosticEnvSummary(), sessionsTable: SESSIONS_TABLE },
+      env: { ...diagnosticEnvSummary(), sessionsTable: currentSessionsTable('session:finalize:supabase') },
       error: describeError(err),
       step: 'finalizeSession.supabase',
     }
@@ -1113,7 +1118,7 @@ export async function mergeSessionArtifacts(id: string, patch: SessionPatch) {
   } catch (err) {
     logDiagnostic('error', 'session:merge:failure', {
       sessionId: id,
-      env: { ...diagnosticEnvSummary(), sessionsTable: SESSIONS_TABLE },
+      env: { ...diagnosticEnvSummary(), sessionsTable: currentSessionsTable('session:merge') },
       error: describeError(err),
     })
     throw err
@@ -1183,7 +1188,7 @@ export async function deleteSession(
   } catch (err) {
     logDiagnostic('error', 'session:delete:supabase-failure', {
       id,
-      env: { ...diagnosticEnvSummary(), sessionsTable: SESSIONS_TABLE },
+      env: { ...diagnosticEnvSummary(), sessionsTable: currentSessionsTable('session:delete:supabase') },
       error: describeError(err),
     })
     throw err
@@ -1263,7 +1268,7 @@ export async function clearAllSessions(): Promise<{ ok: boolean }> {
       } catch (err) {
         logDiagnostic('error', 'session:clear-all:supabase-failure', {
           sessionId: record.id,
-          env: { ...diagnosticEnvSummary(), sessionsTable: SESSIONS_TABLE },
+          env: { ...diagnosticEnvSummary(), sessionsTable: currentSessionsTable('session:clear-all') },
           error: describeError(err),
         })
       }
@@ -1521,7 +1526,7 @@ export function rememberSessionManifest(
   upsertSessionRecord(derived).catch((err) =>
     logDiagnostic('error', 'session:remember:supabase-failure', {
       sessionId: derived.id,
-      env: { ...diagnosticEnvSummary(), sessionsTable: SESSIONS_TABLE },
+      env: { ...diagnosticEnvSummary(), sessionsTable: currentSessionsTable('session:remember') },
       error: describeError(err),
     }),
   )
