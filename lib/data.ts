@@ -755,6 +755,60 @@ async function persistSessionSnapshot(session: RememberedSession) {
   }
 }
 
+function resolveFallbackEmailForRecovery() {
+  const resolved = resolveDefaultNotifyEmailServer()
+  if (typeof resolved !== 'string') return ''
+  const trimmed = resolved.trim()
+  return trimmed
+}
+
+async function attemptSessionRecovery(sessionId: string): Promise<RememberedSession | null> {
+  const timestamp = diagnosticTimestamp()
+  const fallbackEmail = resolveFallbackEmailForRecovery()
+  const recoveryPayload: RememberedSession = {
+    id: sessionId,
+    created_at: new Date().toISOString(),
+    email_to: fallbackEmail,
+    user_handle: null,
+    status: 'in_progress',
+    duration_ms: 0,
+    total_turns: 0,
+    turns: [],
+    artifacts: {},
+  }
+
+  logDiagnostic('error', 'session:append:missing-session', {
+    sessionId,
+    fallbackEmail: fallbackEmail ? 'resolved_default' : 'empty',
+    env: { ...diagnosticEnvSummary(), sessionsTable: SESSIONS_TABLE },
+    memBootedAt,
+    memSessions: mem.sessions.size,
+    timestamp,
+  })
+
+  try {
+    const persisted = await upsertSessionRecord(recoveryPayload)
+    const normalized = coerceSessionRecord(persisted)
+    const recovered: RememberedSession = { ...normalized, turns: [] }
+    mem.sessions.set(sessionId, recovered)
+    logDiagnostic('log', 'session:append:recovered', {
+      sessionId,
+      fallbackEmail: fallbackEmail ? 'resolved_default' : 'empty',
+      env: { ...diagnosticEnvSummary(), sessionsTable: SESSIONS_TABLE },
+      timestamp,
+    })
+    return recovered
+  } catch (err) {
+    logDiagnostic('error', 'session:append:recovery-failed', {
+      sessionId,
+      env: { ...diagnosticEnvSummary(), sessionsTable: SESSIONS_TABLE },
+      error: describeError(err),
+      timestamp,
+    })
+    return null
+  }
+}
+
 export async function appendTurn(id: string, turn: Partial<Turn>) {
   const timestamp = diagnosticTimestamp()
   let s = mem.sessions.get(id)
@@ -788,7 +842,17 @@ export async function appendTurn(id: string, turn: Partial<Turn>) {
       message: 'Attempted to append a turn but the in-memory session was missing.',
       details: { sessionId: id, bootedAt: memBootedAt, storedSessions: mem.sessions.size },
     })
-    const error = new Error('Session not found')
+
+    const recovered = await attemptSessionRecovery(id)
+    if (recovered) {
+      s = recovered
+    }
+  }
+
+  if (!s) {
+    const error = new Error(
+      `[diagnostic] ${timestamp} session not found after recovery attempt; clear stored session id and restart the interview.`,
+    )
     ;(error as any).code = 'SESSION_NOT_FOUND'
     throw error
   }
