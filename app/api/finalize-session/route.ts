@@ -291,7 +291,7 @@ export async function POST(req: NextRequest) {
       manifestUrl,
     )
 
-    mergeSessionArtifacts(sessionId, {
+    await mergeSessionArtifacts(sessionId, {
       artifacts: {
         session_manifest: manifestUrl,
         manifest: manifestUrl,
@@ -359,11 +359,11 @@ export async function POST(req: NextRequest) {
     }
 
     if ('ok' in emailStatus && emailStatus.ok) {
-      mergeSessionArtifacts(sessionId, { status: 'emailed' })
+      await mergeSessionArtifacts(sessionId, { status: 'emailed' })
     } else if ('skipped' in emailStatus && emailStatus.skipped) {
-      mergeSessionArtifacts(sessionId, { status: 'completed' })
+      await mergeSessionArtifacts(sessionId, { status: 'completed' })
     } else {
-      mergeSessionArtifacts(sessionId, { status: 'error' })
+      await mergeSessionArtifacts(sessionId, { status: 'error' })
 
       flagFox({
         id: 'theory-4-email-status-error-api',
