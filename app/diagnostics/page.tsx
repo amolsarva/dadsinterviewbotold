@@ -78,6 +78,7 @@ type BlobFlowStep = {
   message?: string
   note?: string
   hint?: string
+  detail?: string
   error?: string
   responseSnippet?: string
 }
