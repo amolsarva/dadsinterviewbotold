@@ -24,7 +24,6 @@ export function SiteNav() {
       { href: buildScopedPath('/history', handle), label: 'History' },
       { href: buildScopedPath('/settings', handle), label: 'Settings' },
       { href: buildScopedPath('/diagnostics', handle), label: 'Diagnostics' },
-      { href: buildScopedPath('/debug', handle), label: 'Debug' },
     ],
     [handle],
   )
