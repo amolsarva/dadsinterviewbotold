@@ -32,6 +32,7 @@ This project will fail fast when Supabase is misconfigured. Use this list to mak
 
 4. **RLS / policies**
    - Database and storage operations rely on the service role; ensure the key is active and not restricted.
+   - Lock down `public.conversation_turns` with per-user or per-tenant policies; see `docs/conversation-turns-rls.md` for ready-to-run SQL and testing tips.
    - If you add RLS policies, keep service role access or adjust the code to use an allowed key.
 
 5. **Network + domain expectations**
