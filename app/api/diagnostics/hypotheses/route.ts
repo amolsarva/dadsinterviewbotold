@@ -33,13 +33,6 @@ type OpenAITtsProbe = {
   error?: string
 }
 
-type SupabaseTableProbe = {
-  ok: boolean
-  tables?: string[]
-  error?: string
-  status?: number | null
-}
-
 const OPENAI_HYPOTHESES = [
   'OPENAI_API_KEY may be missing or blank.',
   'OPENAI_MODEL may be missing.',
@@ -59,7 +52,6 @@ const SUPABASE_HYPOTHESES = [
   'Service role key could still be the placeholder value.',
   'Supabase bucket may not exist or be readable with service role.',
   'Turns table hints may be missing for server or client.',
-  'Service role may lack access to information_schema for discovery.',
   'SUPABASE_STORAGE_BUCKET might be unset or typoed.',
   'Cached Supabase client errors may persist until restart.',
   'Service role key length could indicate an incomplete copy.',
@@ -167,35 +159,6 @@ async function probeOpenAITts(): Promise<OpenAITtsProbe> {
   }
 }
 
-async function probeSupabaseTables(): Promise<SupabaseTableProbe> {
-  const started = Date.now()
-  try {
-    const client = getSupabaseClient()
-    const { data, error, status } = await client
-      .from('information_schema.tables')
-      .select('table_name')
-      .limit(5)
-    if (error) {
-      const normalized = normalizeError(error)
-      log('error', 'supabase-tables:failure', { durationMs: Date.now() - started, error: normalized })
-      return {
-        ok: false,
-        status: typeof status === 'number' ? status : null,
-        error: typeof error.message === 'string' ? error.message : 'Failed to list tables',
-      }
-    }
-    const tables = (data ?? [])
-      .map((row: any) => (typeof row?.table_name === 'string' ? row.table_name : null))
-      .filter((name: string | null): name is string => Boolean(name))
-    log('log', 'supabase-tables:success', { durationMs: Date.now() - started, tables })
-    return { ok: true, tables }
-  } catch (error) {
-    const normalized = normalizeError(error)
-    log('error', 'supabase-tables:exception', { durationMs: Date.now() - started, error: normalized })
-    return { ok: false, error: normalized.message ?? 'Unexpected Supabase table failure' }
-  }
-}
-
 async function probeSupabaseBucket(): Promise<{ ok: boolean; error?: string }> {
   const started = Date.now()
   try {
@@ -222,7 +185,6 @@ async function runHypotheses(): Promise<HypothesisResult[]> {
   const openaiChat = await probeOpenAIChat()
   const openaiTts = await probeOpenAITts()
   const supabaseBucket = await probeSupabaseBucket()
-  const supabaseTables = await probeSupabaseTables()
 
   const openaiModel = process.env.OPENAI_MODEL?.trim()
   const openaiKey = process.env.OPENAI_API_KEY?.trim()
@@ -420,20 +382,6 @@ async function runHypotheses(): Promise<HypothesisResult[]> {
       process.env.SUPABASE_TURNS_TABLE && process.env.NEXT_PUBLIC_SUPABASE_TURNS_TABLE
         ? undefined
         : 'Set both SUPABASE_TURNS_TABLE and NEXT_PUBLIC_SUPABASE_TURNS_TABLE to the canonical table.',
-  })
-
-  add({
-    id: 'supabase-table-discovery',
-    category: 'supabase',
-    label: 'Table discovery works',
-    status: supabaseTables.ok ? 'ok' : 'error',
-    detail: supabaseTables.ok
-      ? `Information schema responded (${(supabaseTables.tables ?? []).length} tables sampled).`
-      : `Table discovery failed: ${supabaseTables.error ?? 'unknown error'}.`,
-    evidence: supabaseTables.ok ? { tables: supabaseTables.tables } : undefined,
-    suggestion: supabaseTables.ok
-      ? undefined
-      : 'Ensure the service role has access to information_schema or provide explicit table hints.',
   })
 
   add({
