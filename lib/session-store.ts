@@ -21,6 +21,16 @@ export type SessionRecord = {
 }
 
 let cachedSessionsTable: string | null = null
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+
+function assertUuidFormat(sessionId: string, step: string) {
+  if (UUID_PATTERN.test(sessionId)) return
+
+  const message =
+    'Session IDs must be UUID strings to match the Supabase sessions.id column. Update the schema to use text or generate UUIDs.'
+  log('error', 'id:invalid', { sessionId, step, message })
+  throw new Error(`${message} | Received: ${sessionId}`)
+}
 
 function resolveSessionsTableName(step: string): string {
   const raw = process.env.SUPABASE_SESSIONS_TABLE
@@ -124,6 +134,7 @@ export function getSupabaseSessionClient(): SupabaseClient {
 export async function upsertSessionRecord(record: SessionRecord): Promise<SessionRecord> {
   const supabase = getSupabaseSessionClient()
   const table = sessionsTableName('upsert:start')
+  assertUuidFormat(record.id, 'upsert:validate-id')
   const sanitizedRecord = sanitizeSessionPayload(record, table)
   log('log', 'upsert:start', {
     sessionId: record.id,
@@ -151,6 +162,7 @@ export async function upsertSessionRecord(record: SessionRecord): Promise<Sessio
 export async function fetchSessionRecord(id: string): Promise<SessionRecord | null> {
   const supabase = getSupabaseSessionClient()
   const table = sessionsTableName('fetch:start')
+  assertUuidFormat(id, 'fetch:validate-id')
   log('log', 'fetch:start', { sessionId: id, table })
 
   const { data, error } = await supabase
@@ -198,6 +210,7 @@ export async function fetchAllSessions(): Promise<SessionRecord[]> {
 export async function deleteSessionRecord(id: string): Promise<void> {
   const supabase = getSupabaseSessionClient()
   const table = sessionsTableName('delete:start')
+  assertUuidFormat(id, 'delete:validate-id')
   log('log', 'delete:start', { sessionId: id, table })
 
   const { error } = await supabase.from(table).delete().eq('id', id)

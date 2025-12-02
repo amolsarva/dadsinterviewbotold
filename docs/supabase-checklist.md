@@ -28,6 +28,7 @@ This project will fail fast when Supabase is misconfigured. Use this list to mak
 
 3. **Sessions table shape**
    - Table must include at least `id`, `created_at`, `email_to`, `status`, and `duration_ms` columns; optional columns include `user_handle`, `title`, `artifacts`, and `total_turns`.
+   - `id` should remain a `uuid` column (see `docs/supabase-schema.sql`); using text/short IDs will trigger "invalid input syntax for type uuid" when the app upserts.
    - `SUPABASE_SESSIONS_TABLE` must be set to this table name explicitly; diagnostics will fail fast if it is missing or misnamed.
    - Grant the service role read/write access so health checks and upserts do not return "Could not find the table public.<name>" errors.
    - Run the statements in `docs/supabase-schema.sql` to create the `sessions` table or patch an existing one with the expected defaults and status constraint.

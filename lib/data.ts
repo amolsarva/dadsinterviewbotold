@@ -113,7 +113,28 @@ let hydrationPromise: Promise<void> | null = null
 const primerLoadPromises = new Map<string, Promise<void>>()
 
 function uid() {
-  return Math.random().toString(36).slice(2) + Date.now().toString(36)
+  try {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+      return crypto.randomUUID()
+    }
+  } catch (error) {
+    console.error(`[diagnostic] ${new Date().toISOString()} uid:randomUUID:failure`, {
+      error: error instanceof Error ? error.message : `${error}`,
+      env: { NODE_ENV: process.env.NODE_ENV ?? 'unknown' },
+    })
+  }
+
+  // Fallback UUID v4-ish generator for environments without crypto.randomUUID.
+  const fallback = ([1e7] as any + -1e3 + -4e3 + -8e3 + -1e11).replace(/[018]/g, (c: string) => {
+    const random = (Math.random() * 16) | 0
+    const value = Number(c) ^ (random & (15 >> (Number(c) / 4)))
+    return value.toString(16)
+  })
+  console.error(`[diagnostic] ${new Date().toISOString()} uid:randomUUID:fallback`, {
+    generated: fallback,
+    env: { NODE_ENV: process.env.NODE_ENV ?? 'unknown' },
+  })
+  return fallback
 }
 
 function inlineAwareLabel(label: string, value: string | undefined | null) {
