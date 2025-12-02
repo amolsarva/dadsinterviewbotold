@@ -1,12 +1,16 @@
 // lib/supabase-health.ts
 // Modern Supabase JS v2-compatible health checks with clean diagnostics,
-// avoiding forbidden pg_catalog introspection (e.g., pg_tables).
+// avoiding forbidden pg_catalog introspection.
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
 type LogLevel = 'log' | 'error';
 
 const ts = () => new Date().toISOString();
+
+// ----------------------------------------------------------------------
+// ENV SUMMARY + LOGGING
+// ----------------------------------------------------------------------
 
 const envSummary = () => ({
   NODE_ENV: process.env.NODE_ENV ?? 'unknown',
@@ -23,10 +27,12 @@ const envSummary = () => ({
 function log(level: LogLevel, step: string, payload: Record<string, unknown> = {}) {
   const prefix = `[diagnostic] ${ts()} supabase-health:${step}`;
   const entry = { ...payload, envSummary: envSummary() };
-  level === 'error'
-    ? console.error(prefix, entry)
-    : console.log(prefix, entry);
+  level === 'error' ? console.error(prefix, entry) : console.log(prefix, entry);
 }
+
+// ----------------------------------------------------------------------
+// ERROR NORMALIZATION
+// ----------------------------------------------------------------------
 
 function normalizeError(error: unknown) {
   if (error instanceof Error) return { message: error.message, stack: error.stack };
@@ -40,7 +46,17 @@ function normalizeError(error: unknown) {
   return { message: typeof error === 'string' ? error : 'Unknown error', value: error };
 }
 
-function requireSupabaseEnv() {
+// ----------------------------------------------------------------------
+// STRICT ENV EXTRACTION (TYPE-SAFE)
+// ----------------------------------------------------------------------
+
+export function requireSupabaseEnv(): {
+  supabaseUrl: string;
+  serviceRoleKey: string;
+  bucketName: string;
+  sessionsTable: string;
+  turnsTable: string;
+} {
   const supabaseUrl = process.env.SUPABASE_URL?.trim();
   const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
   const bucketName = process.env.SUPABASE_STORAGE_BUCKET?.trim();
@@ -54,7 +70,7 @@ function requireSupabaseEnv() {
   if (!sessionsTable) missing.push('SUPABASE_SESSIONS_TABLE');
   if (!turnsTable) missing.push('SUPABASE_TURNS_TABLE');
 
-  if (missing.length) {
+  if (missing.length > 0) {
     throw new Error(`Missing required env vars: ${missing.join(', ')}`);
   }
 
@@ -62,10 +78,14 @@ function requireSupabaseEnv() {
     supabaseUrl,
     serviceRoleKey,
     bucketName,
-    turnsTable,
     sessionsTable,
+    turnsTable,
   };
 }
+
+// ----------------------------------------------------------------------
+// SAFE WRAPPER
+// ----------------------------------------------------------------------
 
 async function safe<T>(
   name: string,
@@ -113,9 +133,9 @@ function recoveryHint(name: string) {
   }
 }
 
-// ------------------------------------------------------------------------
-// CHECK 1: Service role key validation WITHOUT catalog tables
-// ------------------------------------------------------------------------
+// ----------------------------------------------------------------------
+// CHECK 1: Service role key validation
+// ----------------------------------------------------------------------
 
 async function validateServiceRoleKey(supabase: SupabaseClient, sessionsTable: string) {
   return safe('validateServiceRoleKey', async () => {
@@ -131,9 +151,9 @@ async function validateServiceRoleKey(supabase: SupabaseClient, sessionsTable: s
   });
 }
 
-// ------------------------------------------------------------------------
+// ----------------------------------------------------------------------
 // CHECK 2: Turns table exists
-// ------------------------------------------------------------------------
+// ----------------------------------------------------------------------
 
 async function validateTurnsTableSchema(supabase: SupabaseClient, table: string) {
   return safe('validateTurnsTableSchema', async () => {
@@ -143,9 +163,9 @@ async function validateTurnsTableSchema(supabase: SupabaseClient, table: string)
   });
 }
 
-// ------------------------------------------------------------------------
+// ----------------------------------------------------------------------
 // CHECK 3: Sessions table exists
-// ------------------------------------------------------------------------
+// ----------------------------------------------------------------------
 
 async function validateSessionsTableSchema(supabase: SupabaseClient, sessionsTable: string) {
   return safe('validateSessionsTableSchema', async () => {
@@ -161,9 +181,9 @@ async function validateSessionsTableSchema(supabase: SupabaseClient, sessionsTab
   });
 }
 
-// ------------------------------------------------------------------------
+// ----------------------------------------------------------------------
 // CHECK 4: Bucket exists
-// ------------------------------------------------------------------------
+// ----------------------------------------------------------------------
 
 async function validateStorageBucketExists(supabase: SupabaseClient, bucket: string) {
   return safe('validateStorageBucketExists', async () => {
@@ -173,9 +193,9 @@ async function validateStorageBucketExists(supabase: SupabaseClient, bucket: str
   });
 }
 
-// ------------------------------------------------------------------------
-// CHECK 5: Storage write-test
-// ------------------------------------------------------------------------
+// ----------------------------------------------------------------------
+// CHECK 5: Bucket write-test
+// ----------------------------------------------------------------------
 
 async function validateStorageWrite(supabase: SupabaseClient, bucket: string) {
   return safe('validateStorageWrite', async () => {
@@ -193,9 +213,9 @@ async function validateStorageWrite(supabase: SupabaseClient, bucket: string) {
   });
 }
 
-// ------------------------------------------------------------------------
+// ----------------------------------------------------------------------
 // MASTER CHECK
-// ------------------------------------------------------------------------
+// ----------------------------------------------------------------------
 
 export async function runSupabaseHealthCheck() {
   const started = Date.now();
@@ -205,6 +225,7 @@ export async function runSupabaseHealthCheck() {
     const { supabaseUrl, serviceRoleKey, bucketName, turnsTable, sessionsTable } =
       requireSupabaseEnv();
 
+    // TypeScript is now satisfied: strings guaranteed.
     const supabase = createClient(supabaseUrl, serviceRoleKey);
 
     const checks = await Promise.all([
@@ -220,7 +241,7 @@ export async function runSupabaseHealthCheck() {
     log('log', 'complete', {
       durationMs: Date.now() - started,
       ok,
-      checksSummary: checks.map(c => ({ name: c.name, ok: c.ok })),
+      checksSummary: checks.map((c) => ({ name: c.name, ok: c.ok })),
     });
 
     return {
