@@ -37,7 +37,7 @@ function logRouteEvent(level: 'log' | 'error', event: string, payload?: Record<s
 const schema = z.object({
   sessionId: z.string().min(1),
   turn: z.union([z.number().int(), z.string()]),
-  wav: z.string().min(1),
+  wav: z.string().default(''),
   mime: z.string().default('audio/webm'),
   duration_ms: z.union([z.number(), z.string()]).default(0),
   reply_text: z.string().default(''),
@@ -79,10 +79,13 @@ export async function POST(req: NextRequest) {
       keys: body && typeof body === 'object' ? Object.keys(body) : null,
     })
     const parsed = schema.parse(body)
+    const userAudioBase64 = (parsed.wav || '').trim()
+    const hasUserAudio = userAudioBase64.length > 0
     logRouteEvent('log', 'save-turn:request:validated', {
       sessionId: parsed.sessionId,
       turn: parsed.turn,
       hasAssistantAudio: Boolean(parsed.assistant_wav),
+      hasUserAudio,
     })
 
     const turnNumber = typeof parsed.turn === 'string' ? Number(parsed.turn) : parsed.turn
@@ -91,14 +94,24 @@ export async function POST(req: NextRequest) {
     }
 
     const mime = parsed.mime || 'audio/webm'
-    const userAudio = await uploadAudio({
-      sessionId: parsed.sessionId,
-      turn: turnNumber,
-      role: 'user',
-      base64: parsed.wav,
-      mime,
-      label: 'user',
-    })
+    let userAudio: Awaited<ReturnType<typeof uploadAudio>> | null = null
+
+    if (!hasUserAudio) {
+      logRouteEvent('error', 'save-turn:user-audio-empty', {
+        sessionId: parsed.sessionId,
+        turn: turnNumber,
+        note: 'Skipping upload; received empty base64 payload.',
+      })
+    } else {
+      userAudio = await uploadAudio({
+        sessionId: parsed.sessionId,
+        turn: turnNumber,
+        role: 'user',
+        base64: userAudioBase64,
+        mime,
+        label: 'user',
+      })
+    }
 
     let assistantAudioUrl: string | null = null
     if (parsed.assistant_wav) {
@@ -118,7 +131,7 @@ export async function POST(req: NextRequest) {
       turn: turnNumber,
       createdAt: new Date().toISOString(),
       durationMs: Number(parsed.duration_ms) || 0,
-      userAudioUrl: userAudio.url,
+      userAudioUrl: userAudio?.url ?? null,
       transcript: parsed.transcript,
       assistantReply: parsed.reply_text,
       provider: parsed.provider,
@@ -136,17 +149,17 @@ export async function POST(req: NextRequest) {
       assistantReply: parsed.reply_text,
       provider: parsed.provider,
       manifestUrl: manifest.url,
-      userAudioUrl: userAudio.url,
+      userAudioUrl: userAudio?.url ?? null,
       assistantAudioUrl,
       durationMs: Number(parsed.duration_ms) || 0,
       assistantDurationMs: Number(parsed.assistant_duration_ms) || 0,
     })
 
-    const responsePayload = { ok: true, userAudioUrl: userAudio.url, manifestUrl: manifest.url, turn: turnRecord }
+    const responsePayload = { ok: true, userAudioUrl: userAudio?.url ?? null, manifestUrl: manifest.url, turn: turnRecord }
     logRouteEvent('log', 'save-turn:success', {
       sessionId: parsed.sessionId,
       turn: turnNumber,
-      userAudioUrl: userAudio.url || null,
+      userAudioUrl: userAudio?.url || null,
       manifestUrl: manifest.url || null,
       assistantAudioUrl,
       turnId: turnRecord?.id || null,
