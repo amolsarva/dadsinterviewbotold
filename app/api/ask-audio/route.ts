@@ -241,20 +241,16 @@ export async function POST(req: NextRequest) {
   const providerQuery = url.searchParams.get('provider')
   const providerEnv = typeof process.env.PROVIDER === 'string' ? process.env.PROVIDER.trim() : ''
   const providerCandidate = providerQuery && providerQuery.trim().length ? providerQuery.trim() : providerEnv
-  const provider = providerCandidate.trim()
+  const provider = providerCandidate && providerCandidate.trim().length ? providerCandidate.trim() : 'google'
+  const providerResolvedFrom = providerCandidate && providerCandidate.trim().length ? 'explicit' : 'default'
 
   logDiagnostic('log', 'ask-audio:provider:resolve', {
     providerQuery: providerQuery ?? null,
     providerEnv: providerEnv || null,
     resolvedProvider: provider || null,
+    providerResolvedFrom,
     hypotheses: providerHypotheses,
   })
-
-  if (!provider) {
-    const message = 'No provider was supplied. Set the provider query parameter or PROVIDER env variable.'
-    logDiagnostic('error', 'ask-audio:provider:missing', { message })
-    return NextResponse.json({ ok: false, error: 'missing_provider', message }, { status: 500 })
-  }
 
   if (provider !== 'google') {
     const message = `Unsupported provider "${provider}". Configure PROVIDER=google and supply GOOGLE_API_KEY/GOOGLE_MODEL.`
@@ -286,6 +282,8 @@ export async function POST(req: NextRequest) {
     const raw = await req.text().catch(() => '')
     const body: AskAudioBody = raw && raw.length ? safeJsonParse(raw) : {}
     const { audio, format = 'webm', text, sessionId } = body || {}
+    const trimmedAudio = typeof audio === 'string' ? audio.trim() : ''
+    const trimmedText = typeof text === 'string' ? text.trim() : ''
     requestTurn = typeof body?.turn === 'number' ? body.turn : null
     requestSessionId = typeof sessionId === 'string' && sessionId ? sessionId : undefined
 
@@ -332,9 +330,21 @@ export async function POST(req: NextRequest) {
     if (memory.highlightDetail) {
       parts.push({ text: `Recent remembered detail: ${memory.highlightDetail}` })
     }
-    if (audio) parts.push({ inlineData: { mimeType: `audio/${format}`, data: audio } })
-    if (text) parts.push({ text })
+    if (trimmedAudio.length) {
+      parts.push({ inlineData: { mimeType: `audio/${format}`, data: trimmedAudio } })
+    }
+    if (trimmedText.length) {
+      parts.push({ text: trimmedText })
+    }
     parts.push({ text: 'Respond only with JSON in the format {"reply":"...","transcript":"...","end_intent":false}.' })
+
+    logDiagnostic('log', 'ask-audio:google:request', {
+      model,
+      hasAudio: Boolean(trimmedAudio.length),
+      hasText: Boolean(trimmedText.length),
+      sessionId: requestSessionId ?? null,
+      turn: requestTurn,
+    })
 
     const response = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${googleApiKey}`,
@@ -364,8 +374,8 @@ export async function POST(req: NextRequest) {
       ok: true,
       provider,
       reply: fallbackReply,
-      transcript: text || '',
-      end_intent: detectCompletionIntent(text || '').shouldStop,
+      transcript: trimmedText || '',
+      end_intent: detectCompletionIntent(trimmedText || '').shouldStop,
       debug: {
         ...debugBase,
         usedFallback: true,
@@ -385,8 +395,8 @@ export async function POST(req: NextRequest) {
       const transcriptText =
         typeof (parsed as any).transcript === 'string' && (parsed as any).transcript.trim().length
           ? (parsed as any).transcript
-          : fallback.transcript || ''
-      const completion = detectCompletionIntent(transcriptText || text || '')
+          : trimmedText || fallback.transcript || ''
+      const completion = detectCompletionIntent(transcriptText || trimmedText || '')
 
       let candidateQuestion =
         typeof (parsed as any).question === 'string' && (parsed as any).question.trim().length
@@ -461,7 +471,7 @@ export async function POST(req: NextRequest) {
       })
       return NextResponse.json(fallback)
     }
-    const completion = detectCompletionIntent(txt || text || '')
+    const completion = detectCompletionIntent(txt || trimmedText || '')
     const fallbackReason = !response.ok
       ? 'provider_error'
       : txt.trim().length
