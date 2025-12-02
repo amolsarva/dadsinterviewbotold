@@ -87,7 +87,15 @@ export async function assertTurnsTableConfigured(): Promise<string> {
  */
 export async function uploadAudio(params: UploadAudioParams): Promise<UploadAudioResult> {
   const { sessionId, turn, role, base64, mime, label = 'audio' } = params
-  const buffer = Buffer.from(base64, 'base64')
+  const payload = base64?.trim() ?? ''
+  if (!payload.length) {
+    throw new Error('Audio payload is empty')
+  }
+
+  const buffer = Buffer.from(payload, 'base64')
+  if (!buffer.byteLength) {
+    throw new Error('Audio payload decoded to zero bytes')
+  }
   const ext = mime.split('/')[1]?.split(';')[0] || 'webm'
   const path = `sessions/${sessionId}/${role}-${String(turn).padStart(4, '0')}.${ext}`
 
