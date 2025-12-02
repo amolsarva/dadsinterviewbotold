@@ -50,6 +50,14 @@ function normalizeError(error: unknown) {
 // STRICT ENV EXTRACTION (TYPE-SAFE)
 // ----------------------------------------------------------------------
 
+/** Ensures env vars are non-empty strings and narrows type for TS. */
+function must(value: string | undefined, name: string): string {
+  if (!value || value.trim() === '') {
+    throw new Error(`Missing required env var: ${name}`);
+  }
+  return value.trim();
+}
+
 export function requireSupabaseEnv(): {
   supabaseUrl: string;
   serviceRoleKey: string;
@@ -57,29 +65,12 @@ export function requireSupabaseEnv(): {
   sessionsTable: string;
   turnsTable: string;
 } {
-  const supabaseUrl = process.env.SUPABASE_URL?.trim();
-  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
-  const bucketName = process.env.SUPABASE_STORAGE_BUCKET?.trim();
-  const sessionsTable = process.env.SUPABASE_SESSIONS_TABLE?.trim();
-  const turnsTable = process.env.SUPABASE_TURNS_TABLE?.trim();
-
-  const missing: string[] = [];
-  if (!supabaseUrl) missing.push('SUPABASE_URL');
-  if (!serviceRoleKey) missing.push('SUPABASE_SERVICE_ROLE_KEY');
-  if (!bucketName) missing.push('SUPABASE_STORAGE_BUCKET');
-  if (!sessionsTable) missing.push('SUPABASE_SESSIONS_TABLE');
-  if (!turnsTable) missing.push('SUPABASE_TURNS_TABLE');
-
-  if (missing.length > 0) {
-    throw new Error(`Missing required env vars: ${missing.join(', ')}`);
-  }
-
   return {
-    supabaseUrl,
-    serviceRoleKey,
-    bucketName,
-    sessionsTable,
-    turnsTable,
+    supabaseUrl: must(process.env.SUPABASE_URL, 'SUPABASE_URL'),
+    serviceRoleKey: must(process.env.SUPABASE_SERVICE_ROLE_KEY, 'SUPABASE_SERVICE_ROLE_KEY'),
+    bucketName: must(process.env.SUPABASE_STORAGE_BUCKET, 'SUPABASE_STORAGE_BUCKET'),
+    sessionsTable: must(process.env.SUPABASE_SESSIONS_TABLE, 'SUPABASE_SESSIONS_TABLE'),
+    turnsTable: must(process.env.SUPABASE_TURNS_TABLE, 'SUPABASE_TURNS_TABLE'),
   };
 }
 
@@ -93,6 +84,7 @@ async function safe<T>(
 ): Promise<{ ok: boolean; name: string; details: string | null; recovery?: string }> {
   const started = Date.now();
   log('log', `${name}:start`);
+
   try {
     const result: any = await fn();
     log('log', `${name}:success`, {
@@ -134,7 +126,7 @@ function recoveryHint(name: string) {
 }
 
 // ----------------------------------------------------------------------
-// CHECK 1: Service role key validation
+// CHECK 1: Service role key works
 // ----------------------------------------------------------------------
 
 async function validateServiceRoleKey(supabase: SupabaseClient, sessionsTable: string) {
@@ -144,21 +136,24 @@ async function validateServiceRoleKey(supabase: SupabaseClient, sessionsTable: s
       .select('id', { head: true })
       .limit(1);
 
-    if (error)
+    if (error) {
       throw new Error(`Service role key failed (table read): ${error.message}`);
+    }
 
     return { details: 'Service role key succeeded.' };
   });
 }
 
 // ----------------------------------------------------------------------
-// CHECK 2: Turns table exists
+// CHECK 2: Turns table exists and is readable
 // ----------------------------------------------------------------------
 
 async function validateTurnsTableSchema(supabase: SupabaseClient, table: string) {
   return safe('validateTurnsTableSchema', async () => {
     const { error } = await supabase.from(table).select('*', { head: true }).limit(1);
-    if (error) throw new Error(`Turns table "${table}" not accessible: ${error.message}`);
+    if (error) {
+      throw new Error(`Turns table "${table}" not accessible: ${error.message}`);
+    }
     return { details: `Turns table "${table}" exists.` };
   });
 }
@@ -174,8 +169,9 @@ async function validateSessionsTableSchema(supabase: SupabaseClient, sessionsTab
       .select('id', { head: true })
       .limit(1);
 
-    if (error)
+    if (error) {
       throw new Error(`Sessions table "${sessionsTable}" not accessible: ${error.message}`);
+    }
 
     return { details: `Sessions table "${sessionsTable}" exists.` };
   });
@@ -188,13 +184,15 @@ async function validateSessionsTableSchema(supabase: SupabaseClient, sessionsTab
 async function validateStorageBucketExists(supabase: SupabaseClient, bucket: string) {
   return safe('validateStorageBucketExists', async () => {
     const { error } = await supabase.storage.from(bucket).list('', { limit: 1 });
-    if (error) throw new Error(`Bucket "${bucket}" not reachable: ${error.message}`);
+    if (error) {
+      throw new Error(`Bucket "${bucket}" not reachable: ${error.message}`);
+    }
     return { details: `Bucket "${bucket}" exists.` };
   });
 }
 
 // ----------------------------------------------------------------------
-// CHECK 5: Bucket write-test
+// CHECK 5: Write + delete test file
 // ----------------------------------------------------------------------
 
 async function validateStorageWrite(supabase: SupabaseClient, bucket: string) {
@@ -206,7 +204,9 @@ async function validateStorageWrite(supabase: SupabaseClient, bucket: string) {
       .from(bucket)
       .upload(testPath, buffer, { contentType: 'text/plain' });
 
-    if (writeErr) throw new Error(`Write failed: ${writeErr.message}`);
+    if (writeErr) {
+      throw new Error(`Write failed: ${writeErr.message}`);
+    }
 
     await supabase.storage.from(bucket).remove([testPath]);
     return { details: 'Write check passed.' };
@@ -225,7 +225,6 @@ export async function runSupabaseHealthCheck() {
     const { supabaseUrl, serviceRoleKey, bucketName, turnsTable, sessionsTable } =
       requireSupabaseEnv();
 
-    // TypeScript is now satisfied: strings guaranteed.
     const supabase = createClient(supabaseUrl, serviceRoleKey);
 
     const checks = await Promise.all([
@@ -259,6 +258,7 @@ export async function runSupabaseHealthCheck() {
       error: norm.message,
       stack: norm.stack,
     });
+
     return {
       ok: false,
       timestamp: ts(),
