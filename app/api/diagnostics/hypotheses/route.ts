@@ -194,7 +194,7 @@ async function runHypotheses(): Promise<HypothesisResult[]> {
     log('log', 'supabase-sessions:health', {
       table: sessionsTableHealth.table,
       ok: sessionsTableHealth.ok,
-      error: sessionsTableHealth.error ?? null,
+      error: sessionsTableHealth.error ?? 'none',
     })
   } catch (error) {
     const normalized = normalizeError(error)
